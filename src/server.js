@@ -126,7 +126,27 @@ async function runMigrations() {
     console.log('🔄 Перевірка міграцій...');
     
     try {
-        // v19: Таблиця запитів на повторну здачу
+        // Перевіряємо чи є test_id в таблиці
+        let needsRecreate = false;
+        try {
+            const tableInfo = db.exec("PRAGMA table_info(resubmit_requests)");
+            if (tableInfo.length > 0) {
+                const columns = tableInfo[0].values.map(row => row[1]);
+                if (!columns.includes('test_id')) {
+                    needsRecreate = true;
+                    console.log('⚠️ Таблиця resubmit_requests застаріла, перестворюю...');
+                }
+            }
+        } catch (e) {
+            // Таблиця не існує - це нормально
+        }
+        
+        // Видаляємо стару таблицю якщо потрібно
+        if (needsRecreate) {
+            db.run('DROP TABLE IF EXISTS resubmit_requests');
+        }
+        
+        // v23: Таблиця запитів на повторну здачу з test_id
         db.run(`
             CREATE TABLE IF NOT EXISTS resubmit_requests (
                 id INTEGER PRIMARY KEY,
@@ -146,20 +166,10 @@ async function runMigrations() {
         db.run('CREATE INDEX IF NOT EXISTS idx_resubmit_requests_status ON resubmit_requests(status)');
         db.run('CREATE INDEX IF NOT EXISTS idx_resubmit_requests_test ON resubmit_requests(test_id)');
         
-        // Додаємо test_id якщо його немає (міграція існуючих таблиць)
-        try {
-            db.run('ALTER TABLE resubmit_requests ADD COLUMN test_id INTEGER');
-        } catch (e) {
-            // Колонка вже існує - ігноруємо
-        }
-        
         saveDatabase();
         console.log('✅ Міграції виконано');
     } catch (err) {
-        // Ігноруємо помилки "already exists"
-        if (!err.message.includes('already exists')) {
-            console.log('ℹ️ Міграції:', err.message);
-        }
+        console.log('⚠️ Міграції:', err.message);
     }
 }
 
