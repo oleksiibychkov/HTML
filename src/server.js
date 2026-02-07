@@ -11,12 +11,64 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 
 // Імпортуємо наші модулі
 const { initDatabase, closeDatabase } = require('./database/connection');
 
 // Створюємо Express додаток
 const app = express();
+
+// ============================================
+// БЕЗПЕКА - Helmet.js
+// ============================================
+// Встановлює безпечні HTTP заголовки
+app.use(helmet({
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+            fontSrc: ["'self'", "https://fonts.gstatic.com"],
+            scriptSrc: ["'self'", "'unsafe-inline'"],
+            imgSrc: ["'self'", "data:", "blob:"],
+            connectSrc: ["'self'", "https://api.anthropic.com"]
+        }
+    },
+    crossOriginEmbedderPolicy: false
+}));
+
+// ============================================
+// БЕЗПЕКА - Rate Limiting
+// ============================================
+// Загальний ліміт для всіх запитів
+const generalLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 хвилин
+    max: 500, // максимум 500 запитів з одного IP
+    message: { error: 'Забагато запитів. Спробуйте пізніше.' },
+    standardHeaders: true,
+    legacyHeaders: false
+});
+
+// Суворий ліміт для авторизації (захист від brute force)
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 хвилин
+    max: 10, // максимум 10 спроб входу
+    message: { error: 'Забагато спроб входу. Спробуйте через 15 хвилин.' },
+    standardHeaders: true,
+    legacyHeaders: false,
+    skipSuccessfulRequests: true // не рахуємо успішні входи
+});
+
+// Ліміт для завантаження файлів
+const uploadLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000, // 1 година
+    max: 50, // максимум 50 завантажень
+    message: { error: 'Забагато завантажень. Спробуйте пізніше.' }
+});
+
+// Застосовуємо загальний ліміт
+app.use(generalLimiter);
 
 // ============================================
 // MIDDLEWARE (проміжні обробники)
@@ -43,6 +95,10 @@ app.use((req, res, next) => {
     console.log(`[${timestamp}] ${req.method} ${req.path}`);
     next();
 });
+
+// Експортуємо лімітери для використання в роутах
+app.set('authLimiter', authLimiter);
+app.set('uploadLimiter', uploadLimiter);
 
 // ============================================
 // МАРШРУТИ API

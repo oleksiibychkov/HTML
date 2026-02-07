@@ -20,9 +20,14 @@ const router = express.Router();
 const SESSION_HOURS = parseInt(process.env.SESSION_LIFETIME_HOURS) || 24;
 
 // ============================================
-// РЕЄСТРАЦІЯ
+// РЕЄСТРАЦІЯ (з rate limiting)
 // ============================================
-router.post('/register', async (req, res) => {
+router.post('/register', (req, res, next) => {
+    // Застосовуємо authLimiter
+    const authLimiter = req.app.get('authLimiter');
+    if (authLimiter) return authLimiter(req, res, next);
+    next();
+}, async (req, res) => {
     try {
         const { email, password, name, role, group, course } = req.body;
         
@@ -113,9 +118,14 @@ router.post('/register', async (req, res) => {
 });
 
 // ============================================
-// ВХІД
+// ВХІД (з rate limiting - захист від brute force)
 // ============================================
-router.post('/login', async (req, res) => {
+router.post('/login', (req, res, next) => {
+    // Застосовуємо authLimiter
+    const authLimiter = req.app.get('authLimiter');
+    if (authLimiter) return authLimiter(req, res, next);
+    next();
+}, async (req, res) => {
     try {
         const { email, password } = req.body;
         

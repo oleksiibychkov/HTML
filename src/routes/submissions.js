@@ -37,6 +37,65 @@ if (!fs.existsSync(resultsDir)) {
     fs.mkdirSync(resultsDir, { recursive: true });
 }
 
+// ============================================
+// ВАЛІДАЦІЯ ФАЙЛІВ ПО MAGIC BYTES
+// ============================================
+// Magic bytes - це перші байти файлу, які визначають його справжній тип
+const MAGIC_BYTES = {
+    pdf: Buffer.from([0x25, 0x50, 0x44, 0x46]), // %PDF
+    docx: Buffer.from([0x50, 0x4B, 0x03, 0x04]), // PK.. (ZIP архів)
+    doc: Buffer.from([0xD0, 0xCF, 0x11, 0xE0])  // OLE Compound Document
+};
+
+/**
+ * Перевіряє справжній тип файлу по magic bytes
+ * @param {string} filePath - шлях до файлу
+ * @param {string} extension - очікуване розширення
+ * @returns {Promise<boolean>}
+ */
+async function validateFileType(filePath, extension) {
+    try {
+        const ext = extension.toLowerCase();
+        
+        // Текстові файли (.txt, .md) не мають magic bytes - перевіряємо що це текст
+        if (ext === '.txt' || ext === '.md') {
+            const buffer = fs.readFileSync(filePath);
+            // Перевіряємо що файл не містить NULL байтів (бінарний файл)
+            for (let i = 0; i < Math.min(buffer.length, 8000); i++) {
+                if (buffer[i] === 0 && buffer[i+1] === 0) {
+                    return false; // Бінарний файл
+                }
+            }
+            return true;
+        }
+        
+        // Читаємо перші 4 байти файлу
+        const buffer = Buffer.alloc(4);
+        const fd = fs.openSync(filePath, 'r');
+        fs.readSync(fd, buffer, 0, 4, 0);
+        fs.closeSync(fd);
+        
+        // Перевіряємо відповідність
+        if (ext === '.pdf') {
+            return buffer.compare(MAGIC_BYTES.pdf) === 0;
+        }
+        
+        if (ext === '.docx') {
+            return buffer.compare(MAGIC_BYTES.docx) === 0;
+        }
+        
+        if (ext === '.doc') {
+            return buffer.compare(MAGIC_BYTES.doc) === 0;
+        }
+        
+        return true; // Невідоме розширення - пропускаємо
+        
+    } catch (err) {
+        console.error('Помилка валідації файлу:', err);
+        return false;
+    }
+}
+
 // Налаштування multer
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
@@ -329,6 +388,20 @@ router.post('/', authMiddleware, studentOnly, upload.single('file'), async (req,
         
         if (!req.file) {
             return res.status(400).json({ error: 'Завантажте файл роботи (PDF, MD, TXT, DOC, DOCX)' });
+        }
+        
+        // ============================================
+        // БЕЗПЕКА: Перевірка справжнього типу файлу
+        // ============================================
+        const fileExt = path.extname(req.file.originalname).toLowerCase();
+        const isValidFile = await validateFileType(req.file.path, fileExt);
+        
+        if (!isValidFile) {
+            fs.unlinkSync(req.file.path);
+            console.warn(`[БЕЗПЕКА] Відхилено підроблений файл: ${req.file.originalname} від користувача ${req.user.id}`);
+            return res.status(400).json({ 
+                error: 'Файл пошкоджений або має неправильний формат. Переконайтесь що завантажуєте справжній PDF/DOC/DOCX/TXT/MD файл.' 
+            });
         }
         
         // Перевіряємо тест
