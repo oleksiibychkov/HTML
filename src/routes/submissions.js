@@ -632,41 +632,51 @@ router.post('/:id/grade', authMiddleware, teacherOnly, async (req, res) => {
         let columns = [];
         let criteria = [];
         
-        if (!submission.criteria_json) {
-            return res.status(400).json({ 
-                error: 'Шаблон критеріїв не налаштовано для цього тесту. Завантажте Excel з критеріями при редагуванні тесту.',
-                need_template: true
-            });
-        }
-        
-        try {
-            templateData = JSON.parse(submission.criteria_json);
-        } catch {
-            return res.status(400).json({ 
-                error: 'Помилка читання шаблону критеріїв. Перезавантажте Excel файл.',
-                need_template: true
-            });
-        }
-        
-        // Перевіряємо наявність нової структури (columns)
-        if (templateData.columns && Array.isArray(templateData.columns)) {
-            columns = templateData.columns;
-            criteria = columns.filter(c => c.type === 'criterion');
-        } else if (templateData.criteria && Array.isArray(templateData.criteria)) {
-            // Старий формат - конвертуємо
-            criteria = templateData.criteria;
-            // Створюємо базові columns зі старих критеріїв
-            columns = criteria.map((c, i) => ({
-                index: i,
-                name: c.name,
-                type: 'criterion',
-                maxPoints: c.maxPoints
-            }));
+        if (submission.criteria_json) {
+            // Є JSON шаблон
+            try {
+                templateData = JSON.parse(submission.criteria_json);
+            } catch {
+                return res.status(400).json({ 
+                    error: 'Помилка читання шаблону критеріїв. Перезавантажте Excel файл.',
+                    need_template: true
+                });
+            }
+            
+            // Перевіряємо наявність нової структури (columns)
+            if (templateData.columns && Array.isArray(templateData.columns)) {
+                columns = templateData.columns;
+                criteria = columns.filter(c => c.type === 'criterion');
+            } else if (templateData.criteria && Array.isArray(templateData.criteria)) {
+                // Старий формат - конвертуємо
+                criteria = templateData.criteria;
+                columns = criteria.map((c, i) => ({
+                    index: i,
+                    name: c.name,
+                    type: 'criterion',
+                    maxPoints: c.maxPoints
+                }));
+            }
+        } else {
+            // Fallback: беремо критерії з таблиці criteria
+            const dbCriteria = queryAll(`
+                SELECT * FROM criteria WHERE test_id = @testId ORDER BY sort_order
+            `, { testId: submission.test_id });
+            
+            if (dbCriteria.length > 0) {
+                criteria = dbCriteria.map((c, i) => ({
+                    index: i,
+                    name: c.name,
+                    type: 'criterion',
+                    maxPoints: c.max_points
+                }));
+                columns = criteria;
+            }
         }
         
         if (criteria.length === 0) {
             return res.status(400).json({ 
-                error: 'Шаблон не містить критеріїв оцінювання. Перевірте що в Excel файлі є стовпці з балами (наприклад: "Критерій – 5 б.").',
+                error: 'Шаблон критеріїв не налаштовано для цього тесту. Завантажте Excel з критеріями при редагуванні тесту.',
                 need_template: true
             });
         }
