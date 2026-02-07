@@ -1299,6 +1299,277 @@ router.delete('/:id', authMiddleware, teacherOnly, (req, res) => {
     }
 });
 
+// ============================================
+// ЗАПИТ НА ПОВТОРНУ ЗДАЧУ (студент)
+// ============================================
+router.post('/:id/resubmit-request', authMiddleware, studentOnly, (req, res) => {
+    try {
+        const submissionId = parseInt(req.params.id);
+        const { reason } = req.body;
+        
+        if (!reason || reason.trim().length < 10) {
+            return res.status(400).json({ error: 'Вкажіть причину запиту (мінімум 10 символів)' });
+        }
+        
+        // Перевіряємо що це здача цього студента
+        const submission = queryOne(`
+            SELECT s.*, t.title as test_title, d.name as discipline_name
+            FROM submissions s
+            JOIN tests t ON s.test_id = t.id
+            JOIN disciplines d ON t.discipline_id = d.id
+            WHERE s.id = @id AND s.student_id = @studentId
+        `, { id: submissionId, studentId: req.user.id });
+        
+        if (!submission) {
+            return res.status(404).json({ error: 'Здачу не знайдено' });
+        }
+        
+        // Перевіряємо чи немає вже активного запиту
+        const existingRequest = queryOne(`
+            SELECT id FROM resubmit_requests 
+            WHERE submission_id = @submissionId AND status = 'pending'
+        `, { submissionId });
+        
+        if (existingRequest) {
+            return res.status(400).json({ error: 'Ви вже маєте активний запит на повторну здачу' });
+        }
+        
+        // Створюємо запит
+        execute(`
+            INSERT INTO resubmit_requests (submission_id, student_id, reason)
+            VALUES (@submissionId, @studentId, @reason)
+        `, { submissionId, studentId: req.user.id, reason: reason.trim() });
+        
+        res.status(201).json({ 
+            message: 'Запит на повторну здачу надіслано. Очікуйте рішення викладача.' 
+        });
+        
+    } catch (err) {
+        console.error('Помилка створення запиту:', err);
+        res.status(500).json({ error: 'Помилка сервера' });
+    }
+});
+
+// ============================================
+// СПИСОК ЗАПИТІВ НА ПОВТОРНУ ЗДАЧУ (викладач)
+// ============================================
+router.get('/resubmit-requests', authMiddleware, teacherOnly, (req, res) => {
+    try {
+        const requests = queryAll(`
+            SELECT rr.*, 
+                   s.original_filename,
+                   s.status as submission_status,
+                   s.total_grade,
+                   u.name as student_name,
+                   u.email as student_email,
+                   u.student_group,
+                   t.title as test_title,
+                   t.id as test_id,
+                   d.name as discipline_name,
+                   d.id as discipline_id
+            FROM resubmit_requests rr
+            JOIN submissions s ON rr.submission_id = s.id
+            JOIN users u ON rr.student_id = u.id
+            JOIN tests t ON s.test_id = t.id
+            JOIN disciplines d ON t.discipline_id = d.id
+            WHERE d.teacher_id = @teacherId
+            ORDER BY 
+                CASE rr.status WHEN 'pending' THEN 0 ELSE 1 END,
+                rr.created_at DESC
+        `, { teacherId: req.user.id });
+        
+        res.json({ requests });
+        
+    } catch (err) {
+        console.error('Помилка отримання запитів:', err);
+        res.status(500).json({ error: 'Помилка сервера' });
+    }
+});
+
+// ============================================
+// СХВАЛИТИ ЗАПИТ НА ПОВТОРНУ ЗДАЧУ (викладач)
+// ============================================
+router.post('/resubmit-requests/:id/approve', authMiddleware, teacherOnly, (req, res) => {
+    try {
+        const requestId = parseInt(req.params.id);
+        const { comment } = req.body;
+        
+        // Отримуємо запит
+        const request = queryOne(`
+            SELECT rr.*, d.teacher_id, s.file_path
+            FROM resubmit_requests rr
+            JOIN submissions s ON rr.submission_id = s.id
+            JOIN tests t ON s.test_id = t.id
+            JOIN disciplines d ON t.discipline_id = d.id
+            WHERE rr.id = @id
+        `, { id: requestId });
+        
+        if (!request) {
+            return res.status(404).json({ error: 'Запит не знайдено' });
+        }
+        
+        if (request.teacher_id !== req.user.id) {
+            return res.status(403).json({ error: 'Це не ваша дисципліна' });
+        }
+        
+        if (request.status !== 'pending') {
+            return res.status(400).json({ error: 'Запит вже розглянуто' });
+        }
+        
+        // Видаляємо стару здачу (та її файл)
+        if (request.file_path) {
+            const filePath = path.join(uploadsDir, request.file_path);
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+        }
+        execute('DELETE FROM submissions WHERE id = @id', { id: request.submission_id });
+        
+        // Оновлюємо статус запиту
+        execute(`
+            UPDATE resubmit_requests 
+            SET status = 'approved', 
+                teacher_comment = @comment, 
+                resolved_at = CURRENT_TIMESTAMP
+            WHERE id = @id
+        `, { id: requestId, comment: comment || 'Дозволено' });
+        
+        res.json({ message: 'Запит схвалено. Студент може здати роботу повторно.' });
+        
+    } catch (err) {
+        console.error('Помилка схвалення:', err);
+        res.status(500).json({ error: 'Помилка сервера' });
+    }
+});
+
+// ============================================
+// ВІДХИЛИТИ ЗАПИТ НА ПОВТОРНУ ЗДАЧУ (викладач)
+// ============================================
+router.post('/resubmit-requests/:id/reject', authMiddleware, teacherOnly, (req, res) => {
+    try {
+        const requestId = parseInt(req.params.id);
+        const { comment } = req.body;
+        
+        if (!comment || comment.trim().length < 5) {
+            return res.status(400).json({ error: 'Вкажіть причину відмови' });
+        }
+        
+        // Отримуємо запит
+        const request = queryOne(`
+            SELECT rr.*, d.teacher_id
+            FROM resubmit_requests rr
+            JOIN submissions s ON rr.submission_id = s.id
+            JOIN tests t ON s.test_id = t.id
+            JOIN disciplines d ON t.discipline_id = d.id
+            WHERE rr.id = @id
+        `, { id: requestId });
+        
+        if (!request) {
+            return res.status(404).json({ error: 'Запит не знайдено' });
+        }
+        
+        if (request.teacher_id !== req.user.id) {
+            return res.status(403).json({ error: 'Це не ваша дисципліна' });
+        }
+        
+        if (request.status !== 'pending') {
+            return res.status(400).json({ error: 'Запит вже розглянуто' });
+        }
+        
+        // Оновлюємо статус
+        execute(`
+            UPDATE resubmit_requests 
+            SET status = 'rejected', 
+                teacher_comment = @comment, 
+                resolved_at = CURRENT_TIMESTAMP
+            WHERE id = @id
+        `, { id: requestId, comment: comment.trim() });
+        
+        res.json({ message: 'Запит відхилено' });
+        
+    } catch (err) {
+        console.error('Помилка відхилення:', err);
+        res.status(500).json({ error: 'Помилка сервера' });
+    }
+});
+
+// ============================================
+// ДОЗВОЛИТИ ПОВТОРНУ ЗДАЧУ БЕЗ ЗАПИТУ (викладач)
+// ============================================
+router.post('/:id/allow-resubmit', authMiddleware, teacherOnly, (req, res) => {
+    try {
+        const submissionId = parseInt(req.params.id);
+        
+        // Перевіряємо здачу
+        const submission = queryOne(`
+            SELECT s.*, d.teacher_id, u.name as student_name
+            FROM submissions s
+            JOIN tests t ON s.test_id = t.id
+            JOIN disciplines d ON t.discipline_id = d.id
+            JOIN users u ON s.student_id = u.id
+            WHERE s.id = @id
+        `, { id: submissionId });
+        
+        if (!submission) {
+            return res.status(404).json({ error: 'Здачу не знайдено' });
+        }
+        
+        if (submission.teacher_id !== req.user.id) {
+            return res.status(403).json({ error: 'Це не ваша дисципліна' });
+        }
+        
+        // Видаляємо файл
+        if (submission.file_path) {
+            const filePath = path.join(uploadsDir, submission.file_path);
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+        }
+        
+        // Видаляємо здачу
+        execute('DELETE FROM submissions WHERE id = @id', { id: submissionId });
+        
+        // Скасовуємо всі pending запити для цієї здачі
+        execute(`
+            UPDATE resubmit_requests 
+            SET status = 'approved', 
+                teacher_comment = 'Викладач дозволив повторну здачу', 
+                resolved_at = CURRENT_TIMESTAMP
+            WHERE submission_id = @submissionId AND status = 'pending'
+        `, { submissionId });
+        
+        res.json({ 
+            message: `Повторну здачу дозволено для ${submission.student_name}` 
+        });
+        
+    } catch (err) {
+        console.error('Помилка:', err);
+        res.status(500).json({ error: 'Помилка сервера' });
+    }
+});
+
+// ============================================
+// СТАТУС ЗАПИТУ НА ПОВТОРНУ ЗДАЧУ (студент)
+// ============================================
+router.get('/:id/resubmit-status', authMiddleware, studentOnly, (req, res) => {
+    try {
+        const submissionId = parseInt(req.params.id);
+        
+        const request = queryOne(`
+            SELECT * FROM resubmit_requests 
+            WHERE submission_id = @submissionId AND student_id = @studentId
+            ORDER BY created_at DESC
+            LIMIT 1
+        `, { submissionId, studentId: req.user.id });
+        
+        res.json({ request: request || null });
+        
+    } catch (err) {
+        console.error('Помилка:', err);
+        res.status(500).json({ error: 'Помилка сервера' });
+    }
+});
+
 // Обробник помилок multer
 router.use((err, req, res, next) => {
     if (err instanceof multer.MulterError) {

@@ -450,6 +450,7 @@ function TeacherDashboard({ showNotification }) {
   const [showAddTest, setShowAddTest] = useState(null);
   const [selectedDiscipline, setSelectedDiscipline] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [resubmitRequests, setResubmitRequests] = useState([]); // Запити на перездачу
 
   useEffect(() => {
     loadData();
@@ -457,16 +458,61 @@ function TeacherDashboard({ showNotification }) {
 
   const loadData = async () => {
     try {
-      const [discData, subData] = await Promise.all([
+      const [discData, subData, reqData] = await Promise.all([
         api('/disciplines'),
-        api('/submissions')
+        api('/submissions'),
+        api('/submissions/resubmit-requests')
       ]);
       setDisciplines(discData.disciplines || []);
       setSubmissions(subData.submissions || []);
+      setResubmitRequests(reqData.requests || []);
     } catch (err) {
       showNotification(err.message, 'error');
     }
     setLoading(false);
+  };
+
+  const handleResubmitApprove = async (requestId) => {
+    try {
+      await api(`/submissions/resubmit-requests/${requestId}/approve`, {
+        method: 'POST',
+        body: { comment: 'Дозволено' }
+      });
+      showNotification('Запит схвалено. Студент може здати роботу повторно.', 'success');
+      loadData();
+    } catch (err) {
+      showNotification(err.message, 'error');
+    }
+  };
+
+  const handleResubmitReject = async (requestId, comment) => {
+    if (!comment || comment.trim().length < 5) {
+      showNotification('Вкажіть причину відмови', 'error');
+      return;
+    }
+    try {
+      await api(`/submissions/resubmit-requests/${requestId}/reject`, {
+        method: 'POST',
+        body: { comment }
+      });
+      showNotification('Запит відхилено', 'success');
+      loadData();
+    } catch (err) {
+      showNotification(err.message, 'error');
+    }
+  };
+
+  const allowResubmit = async (submissionId) => {
+    if (!confirm('Дозволити студенту здати роботу повторно?')) return;
+    try {
+      await api(`/submissions/${submissionId}/allow-resubmit`, {
+        method: 'POST'
+      });
+      showNotification('Перездачу дозволено', 'success');
+      loadData();
+    } catch (err) {
+      showNotification(err.message, 'error');
+    }
   };
 
   const handleAddDiscipline = async (name) => {
@@ -545,7 +591,32 @@ function TeacherDashboard({ showNotification }) {
         >
           🚀 Масове оцінювання
         </button>
+        <button 
+          onClick={() => setActiveTab('requests')}
+          style={activeTab === 'requests' ? styles.tabActive : styles.tab}
+        >
+          🔄 Запити {resubmitRequests.filter(r => r.status === 'pending').length > 0 && (
+            <span style={{
+              marginLeft: '6px',
+              padding: '2px 8px',
+              borderRadius: '10px',
+              backgroundColor: '#ef4444',
+              fontSize: '12px'
+            }}>
+              {resubmitRequests.filter(r => r.status === 'pending').length}
+            </span>
+          )}
+        </button>
       </div>
+
+      {activeTab === 'requests' && (
+        <ResubmitRequestsView 
+          requests={resubmitRequests}
+          onApprove={handleResubmitApprove}
+          onReject={handleResubmitReject}
+          showNotification={showNotification}
+        />
+      )}
 
       {activeTab === 'results' && (
         <ResultsView 
@@ -615,6 +686,7 @@ function TeacherDashboard({ showNotification }) {
           submissions={submissions}
           showNotification={showNotification}
           onUpdate={loadData}
+          onAllowResubmit={allowResubmit}
         />
       )}
 
@@ -1306,7 +1378,7 @@ function AddTestModal({ disciplineId, onClose, onAdd }) {
 // ============================================
 // SUBMISSIONS LIST
 // ============================================
-function SubmissionsList({ submissions, showNotification, onUpdate }) {
+function SubmissionsList({ submissions, showNotification, onUpdate, onAllowResubmit }) {
   const [grading, setGrading] = useState(null);
 
   const gradeWithBI = async (submissionId) => {
@@ -1364,7 +1436,7 @@ function SubmissionsList({ submissions, showNotification, onUpdate }) {
                 </div>
               ) : sub.status === 'error' ? (
                 <div style={{ color: '#ef4444' }}>
-                  Помилка оцінювання
+                  ⚠️ Помилка оцінювання
                   <button
                     onClick={() => gradeWithBI(sub.id)}
                     style={{ ...styles.aiBtn, marginLeft: '10px' }}
@@ -1382,10 +1454,200 @@ function SubmissionsList({ submissions, showNotification, onUpdate }) {
                   {grading === sub.id ? '🔄 BI оцінює...' : '🤖 Оцінити з BI'}
                 </button>
               )}
+              {/* Кнопка дозволу перездачі */}
+              {onAllowResubmit && (
+                <button
+                  onClick={() => onAllowResubmit(sub.id)}
+                  style={{
+                    marginLeft: '10px',
+                    padding: '8px 16px',
+                    background: 'rgba(245, 158, 11, 0.2)',
+                    border: '1px solid #f59e0b',
+                    borderRadius: '8px',
+                    color: '#f59e0b',
+                    cursor: 'pointer',
+                    fontSize: '14px'
+                  }}
+                >
+                  🔄 Дозволити перездачу
+                </button>
+              )}
             </div>
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ============================================
+// RESUBMIT REQUESTS VIEW (для викладача)
+// ============================================
+function ResubmitRequestsView({ requests, onApprove, onReject, showNotification }) {
+  const [rejectModal, setRejectModal] = useState(null);
+  const [rejectComment, setRejectComment] = useState('');
+
+  const pendingRequests = requests.filter(r => r.status === 'pending');
+  const processedRequests = requests.filter(r => r.status !== 'pending');
+
+  const handleReject = () => {
+    if (rejectComment.trim().length < 5) {
+      showNotification('Вкажіть причину відмови (мін. 5 символів)', 'error');
+      return;
+    }
+    onReject(rejectModal.id, rejectComment);
+    setRejectModal(null);
+    setRejectComment('');
+  };
+
+  return (
+    <div style={styles.section}>
+      <h3 style={styles.sectionTitle}>Запити на повторну здачу</h3>
+      
+      {pendingRequests.length === 0 && processedRequests.length === 0 ? (
+        <div style={styles.emptyState}>
+          <p>Немає запитів на повторну здачу</p>
+        </div>
+      ) : (
+        <>
+          {pendingRequests.length > 0 && (
+            <div style={{ marginBottom: '30px' }}>
+              <h4 style={{ color: '#f59e0b', marginBottom: '16px' }}>
+                ⏳ Очікують розгляду ({pendingRequests.length})
+              </h4>
+              <div style={styles.submissionList}>
+                {pendingRequests.map(req => (
+                  <div key={req.id} style={{ ...styles.submissionCard, borderLeft: '4px solid #f59e0b' }}>
+                    <div style={styles.submissionHeader}>
+                      <span style={styles.studentName}>{req.student_name}</span>
+                      <span style={styles.submissionDate}>
+                        {new Date(req.created_at).toLocaleString('uk-UA')}
+                      </span>
+                    </div>
+                    <div style={styles.submissionDetails}>
+                      <span>{req.discipline_name}</span>
+                      <span style={styles.testTypeBadge}>{req.test_title}</span>
+                      <span style={{ color: '#94a3b8' }}>Група: {req.student_group}</span>
+                    </div>
+                    <div style={{ 
+                      margin: '12px 0', 
+                      padding: '12px', 
+                      background: 'rgba(30, 41, 59, 0.5)', 
+                      borderRadius: '8px' 
+                    }}>
+                      <strong style={{ color: '#94a3b8' }}>Причина:</strong>
+                      <p style={{ color: '#e2e8f0', marginTop: '4px' }}>{req.reason}</p>
+                    </div>
+                    <div style={{ display: 'flex', gap: '10px' }}>
+                      <button
+                        onClick={() => onApprove(req.id)}
+                        style={{
+                          padding: '10px 20px',
+                          background: 'linear-gradient(135deg, #10b981, #059669)',
+                          border: 'none',
+                          borderRadius: '8px',
+                          color: 'white',
+                          cursor: 'pointer',
+                          fontWeight: '600'
+                        }}
+                      >
+                        ✅ Схвалити
+                      </button>
+                      <button
+                        onClick={() => setRejectModal(req)}
+                        style={{
+                          padding: '10px 20px',
+                          background: 'rgba(239, 68, 68, 0.2)',
+                          border: '1px solid #ef4444',
+                          borderRadius: '8px',
+                          color: '#ef4444',
+                          cursor: 'pointer',
+                          fontWeight: '600'
+                        }}
+                      >
+                        ❌ Відхилити
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {processedRequests.length > 0 && (
+            <div>
+              <h4 style={{ color: '#64748b', marginBottom: '16px' }}>
+                📋 Історія ({processedRequests.length})
+              </h4>
+              <div style={styles.submissionList}>
+                {processedRequests.slice(0, 10).map(req => (
+                  <div key={req.id} style={{ 
+                    ...styles.submissionCard, 
+                    opacity: 0.7,
+                    borderLeft: `4px solid ${req.status === 'approved' ? '#10b981' : '#ef4444'}`
+                  }}>
+                    <div style={styles.submissionHeader}>
+                      <span style={styles.studentName}>{req.student_name}</span>
+                      <span style={{
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        backgroundColor: req.status === 'approved' ? '#065f46' : '#991b1b',
+                        color: 'white'
+                      }}>
+                        {req.status === 'approved' ? '✅ Схвалено' : '❌ Відхилено'}
+                      </span>
+                    </div>
+                    <div style={styles.submissionDetails}>
+                      <span>{req.discipline_name} - {req.test_title}</span>
+                    </div>
+                    {req.teacher_comment && (
+                      <p style={{ color: '#94a3b8', fontSize: '13px', marginTop: '8px' }}>
+                        Коментар: {req.teacher_comment}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Модальне вікно відхилення */}
+      {rejectModal && (
+        <div style={styles.modalOverlay}>
+          <div style={styles.modal}>
+            <h3 style={styles.modalTitle}>Відхилити запит</h3>
+            <p style={{ color: '#94a3b8', marginBottom: '16px' }}>
+              Студент: {rejectModal.student_name}
+            </p>
+            <div style={styles.inputGroup}>
+              <label style={styles.label}>Причина відмови</label>
+              <textarea
+                value={rejectComment}
+                onChange={(e) => setRejectComment(e.target.value)}
+                style={{ ...styles.input, minHeight: '80px', resize: 'vertical' }}
+                placeholder="Вкажіть причину відмови..."
+              />
+            </div>
+            <div style={styles.modalActions}>
+              <button 
+                onClick={() => { setRejectModal(null); setRejectComment(''); }}
+                style={styles.secondaryBtn}
+              >
+                Скасувати
+              </button>
+              <button 
+                onClick={handleReject}
+                style={{ ...styles.primaryBtn, background: 'linear-gradient(135deg, #ef4444, #dc2626)' }}
+              >
+                Відхилити
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1402,6 +1664,9 @@ function StudentDashboard({ showNotification }) {
   const [uploadedFile, setUploadedFile] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [resubmitModal, setResubmitModal] = useState(null); // submission для запиту
+  const [resubmitReason, setResubmitReason] = useState('');
+  const [resubmitStatuses, setResubmitStatuses] = useState({}); // статуси запитів
 
   useEffect(() => {
     loadData();
@@ -1415,10 +1680,39 @@ function StudentDashboard({ showNotification }) {
       ]);
       setDisciplines(discData.disciplines || []);
       setSubmissions(subData.submissions || []);
+      
+      // Завантажуємо статуси запитів для всіх здач
+      const statuses = {};
+      for (const sub of (subData.submissions || [])) {
+        try {
+          const statusData = await api(`/submissions/${sub.id}/resubmit-status`);
+          if (statusData.request) {
+            statuses[sub.id] = statusData.request;
+          }
+        } catch {}
+      }
+      setResubmitStatuses(statuses);
     } catch (err) {
       showNotification(err.message, 'error');
     }
     setLoading(false);
+  };
+
+  const requestResubmit = async () => {
+    if (!resubmitModal || !resubmitReason.trim()) return;
+    
+    try {
+      await api(`/submissions/${resubmitModal.id}/resubmit-request`, {
+        method: 'POST',
+        body: { reason: resubmitReason }
+      });
+      showNotification('Запит надіслано! Очікуйте рішення викладача.', 'success');
+      setResubmitModal(null);
+      setResubmitReason('');
+      loadData();
+    } catch (err) {
+      showNotification(err.message, 'error');
+    }
   };
 
   const loadDisciplineDetails = async (id) => {
@@ -1621,24 +1915,95 @@ function StudentDashboard({ showNotification }) {
           <div style={styles.mySubmissions}>
             <h3 style={styles.sectionTitle}>Мої роботи</h3>
             <div style={styles.submissionHistory}>
-              {submissions.map(sub => (
-                <div key={sub.id} style={styles.historyItem}>
-                  <div style={styles.historyMain}>
-                    <span style={styles.historyDisc}>{sub.discipline_name}</span>
-                    <span style={styles.historyType}>{testTypeLabels[sub.test_type]}</span>
+              {submissions.map(sub => {
+                const resubmitRequest = resubmitStatuses[sub.id];
+                return (
+                  <div key={sub.id} style={styles.historyItem}>
+                    <div style={styles.historyMain}>
+                      <span style={styles.historyDisc}>{sub.discipline_name}</span>
+                      <span style={styles.historyType}>{testTypeLabels[sub.test_type]}</span>
+                    </div>
+                    <div style={styles.historyMeta}>
+                      <span>{new Date(sub.submitted_at).toLocaleString('uk-UA')}</span>
+                      {sub.total_grade !== null ? (
+                        <span style={styles.historyGrade}>Оцінка: {sub.total_grade}/{sub.max_points}</span>
+                      ) : (
+                        <span style={styles.historyPending}>
+                          {sub.status === 'grading' ? 'Оцінюється...' : sub.status === 'error' ? '⚠️ Помилка' : 'На перевірці'}
+                        </span>
+                      )}
+                    </div>
+                    {/* Кнопка запиту на перездачу */}
+                    <div style={{ marginTop: '10px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      {resubmitRequest ? (
+                        <span style={{
+                          fontSize: '13px',
+                          padding: '4px 10px',
+                          borderRadius: '6px',
+                          backgroundColor: resubmitRequest.status === 'pending' ? '#854d0e' : 
+                                          resubmitRequest.status === 'approved' ? '#065f46' : '#991b1b',
+                          color: 'white'
+                        }}>
+                          {resubmitRequest.status === 'pending' && '⏳ Запит на розгляді'}
+                          {resubmitRequest.status === 'approved' && '✅ Перездачу дозволено'}
+                          {resubmitRequest.status === 'rejected' && `❌ Відмовлено: ${resubmitRequest.teacher_comment}`}
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => setResubmitModal(sub)}
+                          style={{
+                            padding: '6px 12px',
+                            fontSize: '13px',
+                            background: 'rgba(245, 158, 11, 0.2)',
+                            border: '1px solid #f59e0b',
+                            borderRadius: '6px',
+                            color: '#f59e0b',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          🔄 Запит на перездачу
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <div style={styles.historyMeta}>
-                    <span>{new Date(sub.submitted_at).toLocaleString('uk-UA')}</span>
-                    {sub.total_grade !== null ? (
-                      <span style={styles.historyGrade}>Оцінка: {sub.total_grade}/{sub.max_points}</span>
-                    ) : (
-                      <span style={styles.historyPending}>
-                        {sub.status === 'grading' ? 'Оцінюється...' : 'На перевірці'}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Модальне вікно запиту на перездачу */}
+        {resubmitModal && (
+          <div style={styles.modalOverlay}>
+            <div style={styles.modal}>
+              <h3 style={styles.modalTitle}>Запит на повторну здачу</h3>
+              <p style={{ color: '#94a3b8', marginBottom: '16px' }}>
+                Тест: {resubmitModal.test_title || resubmitModal.discipline_name}
+              </p>
+              <div style={styles.inputGroup}>
+                <label style={styles.label}>Причина запиту</label>
+                <textarea
+                  value={resubmitReason}
+                  onChange={(e) => setResubmitReason(e.target.value)}
+                  style={{ ...styles.input, minHeight: '100px', resize: 'vertical' }}
+                  placeholder="Опишіть причину, чому потрібна повторна здача (мін. 10 символів)..."
+                />
+              </div>
+              <div style={styles.modalActions}>
+                <button 
+                  onClick={() => { setResubmitModal(null); setResubmitReason(''); }}
+                  style={styles.secondaryBtn}
+                >
+                  Скасувати
+                </button>
+                <button 
+                  onClick={requestResubmit}
+                  style={styles.primaryBtn}
+                  disabled={resubmitReason.trim().length < 10}
+                >
+                  Надіслати запит
+                </button>
+              </div>
             </div>
           </div>
         )}

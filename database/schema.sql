@@ -274,5 +274,37 @@ CREATE TABLE IF NOT EXISTS batch_results (
 CREATE INDEX IF NOT EXISTS idx_batch_results_teacher ON batch_results(teacher_id);
 
 -- ============================================
--- ДЕМО-ДАНІ створюються в init.js з правильними bcrypt хешами
+-- ТАБЛИЦЯ: resubmit_requests (Запити на повторну здачу)
 -- ============================================
+-- Студенти можуть запитати дозвіл на повторну здачу
+CREATE TABLE IF NOT EXISTS resubmit_requests (
+    id INTEGER PRIMARY KEY,
+    
+    -- До якої здачі відноситься запит
+    submission_id INTEGER NOT NULL,
+    
+    -- Хто запитує (студент)
+    student_id INTEGER NOT NULL,
+    
+    -- Причина запиту
+    reason TEXT NOT NULL,
+    
+    -- Статус: 'pending', 'approved', 'rejected'
+    status TEXT DEFAULT 'pending',
+    
+    -- Коментар викладача
+    teacher_comment TEXT,
+    
+    -- Коли створено запит
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    
+    -- Коли розглянуто
+    resolved_at DATETIME,
+    
+    FOREIGN KEY (submission_id) REFERENCES submissions(id) ON DELETE CASCADE,
+    FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_resubmit_requests_submission ON resubmit_requests(submission_id);
+CREATE INDEX IF NOT EXISTS idx_resubmit_requests_student ON resubmit_requests(student_id);
+CREATE INDEX IF NOT EXISTS idx_resubmit_requests_status ON resubmit_requests(status);
