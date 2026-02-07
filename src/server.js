@@ -130,19 +130,28 @@ async function runMigrations() {
         db.run(`
             CREATE TABLE IF NOT EXISTS resubmit_requests (
                 id INTEGER PRIMARY KEY,
-                submission_id INTEGER NOT NULL,
+                submission_id INTEGER,
                 student_id INTEGER NOT NULL,
+                test_id INTEGER NOT NULL,
                 reason TEXT NOT NULL,
                 status TEXT DEFAULT 'pending',
                 teacher_comment TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 resolved_at DATETIME,
-                FOREIGN KEY (submission_id) REFERENCES submissions(id) ON DELETE CASCADE,
-                FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE
+                FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE
             )
         `);
         db.run('CREATE INDEX IF NOT EXISTS idx_resubmit_requests_submission ON resubmit_requests(submission_id)');
         db.run('CREATE INDEX IF NOT EXISTS idx_resubmit_requests_status ON resubmit_requests(status)');
+        db.run('CREATE INDEX IF NOT EXISTS idx_resubmit_requests_test ON resubmit_requests(test_id)');
+        
+        // Додаємо test_id якщо його немає (міграція існуючих таблиць)
+        try {
+            db.run('ALTER TABLE resubmit_requests ADD COLUMN test_id INTEGER');
+        } catch (e) {
+            // Колонка вже існує - ігноруємо
+        }
         
         saveDatabase();
         console.log('✅ Міграції виконано');

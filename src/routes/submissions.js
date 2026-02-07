@@ -1313,7 +1313,7 @@ router.post('/:id/resubmit-request', authMiddleware, studentOnly, (req, res) => 
         
         // Перевіряємо що це здача цього студента
         const submission = queryOne(`
-            SELECT s.* FROM submissions s
+            SELECT s.*, s.test_id FROM submissions s
             WHERE s.id = @id AND s.student_id = @studentId
         `, { id: submissionId, studentId: req.user.id });
         
@@ -1321,21 +1321,21 @@ router.post('/:id/resubmit-request', authMiddleware, studentOnly, (req, res) => 
             return res.status(404).json({ error: 'Здачу не знайдено' });
         }
         
-        // Перевіряємо чи немає вже активного запиту
+        // Перевіряємо чи немає вже активного запиту на цей тест
         const existingRequest = queryOne(`
             SELECT id FROM resubmit_requests 
-            WHERE submission_id = @submissionId AND status = 'pending'
-        `, { submissionId });
+            WHERE test_id = @testId AND student_id = @studentId AND status = 'pending'
+        `, { testId: submission.test_id, studentId: req.user.id });
         
         if (existingRequest) {
             return res.status(400).json({ error: 'Ви вже маєте активний запит на повторну здачу' });
         }
         
-        // Створюємо запит
+        // Створюємо запит з test_id
         execute(`
-            INSERT INTO resubmit_requests (submission_id, student_id, reason)
-            VALUES (@submissionId, @studentId, @reason)
-        `, { submissionId, studentId: req.user.id, reason: reason.trim() });
+            INSERT INTO resubmit_requests (submission_id, student_id, test_id, reason)
+            VALUES (@submissionId, @studentId, @testId, @reason)
+        `, { submissionId, studentId: req.user.id, testId: submission.test_id, reason: reason.trim() });
         
         res.status(201).json({ message: 'Запит надіслано. Очікуйте рішення викладача.' });
         
@@ -1350,6 +1350,7 @@ router.post('/:id/resubmit-request', authMiddleware, studentOnly, (req, res) => 
 // ============================================
 router.get('/resubmit-requests', authMiddleware, teacherOnly, (req, res) => {
     try {
+        // Використовуємо test_id з resubmit_requests напряму (не залежимо від submissions)
         const requests = queryAll(`
             SELECT rr.*, 
                    u.name as student_name,
@@ -1357,9 +1358,8 @@ router.get('/resubmit-requests', authMiddleware, teacherOnly, (req, res) => {
                    t.title as test_title,
                    d.name as discipline_name
             FROM resubmit_requests rr
-            JOIN submissions s ON rr.submission_id = s.id
             JOIN users u ON rr.student_id = u.id
-            JOIN tests t ON s.test_id = t.id
+            JOIN tests t ON rr.test_id = t.id
             JOIN disciplines d ON t.discipline_id = d.id
             WHERE d.teacher_id = @teacherId
             ORDER BY 
@@ -1382,12 +1382,13 @@ router.post('/resubmit-requests/:id/approve', authMiddleware, teacherOnly, (req,
     try {
         const requestId = parseInt(req.params.id);
         
+        // Використовуємо test_id з resubmit_requests, LEFT JOIN для submissions
         const request = queryOne(`
-            SELECT rr.*, d.teacher_id, s.file_path
+            SELECT rr.*, d.teacher_id, s.file_path, s.id as sub_id
             FROM resubmit_requests rr
-            JOIN submissions s ON rr.submission_id = s.id
-            JOIN tests t ON s.test_id = t.id
+            JOIN tests t ON rr.test_id = t.id
             JOIN disciplines d ON t.discipline_id = d.id
+            LEFT JOIN submissions s ON rr.submission_id = s.id
             WHERE rr.id = @id
         `, { id: requestId });
         
@@ -1403,14 +1404,16 @@ router.post('/resubmit-requests/:id/approve', authMiddleware, teacherOnly, (req,
             return res.status(400).json({ error: 'Запит вже розглянуто' });
         }
         
-        // Видаляємо стару здачу
-        if (request.file_path) {
-            const filePath = path.join(__dirname, '../../uploads', request.file_path);
-            if (fs.existsSync(filePath)) {
-                fs.unlinkSync(filePath);
+        // Видаляємо стару здачу якщо вона ще існує
+        if (request.sub_id) {
+            if (request.file_path) {
+                const filePath = path.join(__dirname, '../../uploads', request.file_path);
+                if (fs.existsSync(filePath)) {
+                    fs.unlinkSync(filePath);
+                }
             }
+            execute('DELETE FROM submissions WHERE id = @id', { id: request.sub_id });
         }
-        execute('DELETE FROM submissions WHERE id = @id', { id: request.submission_id });
         
         // Оновлюємо статус запиту
         execute(`
@@ -1439,11 +1442,11 @@ router.post('/resubmit-requests/:id/reject', authMiddleware, teacherOnly, (req, 
             return res.status(400).json({ error: 'Вкажіть причину відмови' });
         }
         
+        // Використовуємо test_id з resubmit_requests
         const request = queryOne(`
             SELECT rr.*, d.teacher_id
             FROM resubmit_requests rr
-            JOIN submissions s ON rr.submission_id = s.id
-            JOIN tests t ON s.test_id = t.id
+            JOIN tests t ON rr.test_id = t.id
             JOIN disciplines d ON t.discipline_id = d.id
             WHERE rr.id = @id
         `, { id: requestId });
