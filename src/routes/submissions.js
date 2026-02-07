@@ -345,16 +345,23 @@ router.post('/', authMiddleware, studentOnly, upload.single('file'), async (req,
         }
         
         // Перевіряємо час
+        // Формуємо поточний час в локальному форматі (для порівняння з збереженим)
         const now = new Date();
-        const startTime = new Date(test.start_time);
-        const endTime = new Date(test.end_time);
+        // Додаємо offset для України (UTC+2, влітку UTC+3)
+        const ukraineOffset = 2 * 60 * 60 * 1000; // +2 години в мілісекундах
+        const nowUkraine = new Date(now.getTime() + ukraineOffset);
+        const nowStr = nowUkraine.toISOString().slice(0, 16); // "YYYY-MM-DDTHH:MM"
         
-        if (now < startTime) {
+        // Порівнюємо як рядки (формат дозволяє лексикографічне порівняння)
+        const startStr = test.start_time.slice(0, 16);
+        const endStr = test.end_time.slice(0, 16);
+        
+        if (nowStr < startStr) {
             fs.unlinkSync(req.file.path);
             return res.status(400).json({ error: 'Тест ще не розпочався' });
         }
         
-        if (now > endTime) {
+        if (nowStr > endStr) {
             fs.unlinkSync(req.file.path);
             return res.status(400).json({ error: 'Час здачі тесту вичерпано' });
         }
@@ -595,6 +602,7 @@ router.get('/:id', authMiddleware, (req, res) => {
 router.post('/:id/grade', authMiddleware, teacherOnly, async (req, res) => {
     try {
         const submissionId = parseInt(req.params.id);
+        console.log(`🔍 Оцінювання submission #${submissionId}`);
         
         // Отримуємо роботу з усією інформацією
         const submission = queryOne(`
@@ -616,8 +624,11 @@ router.post('/:id/grade', authMiddleware, teacherOnly, async (req, res) => {
         `, { id: submissionId });
         
         if (!submission) {
+            console.log('❌ Роботу не знайдено');
             return res.status(404).json({ error: 'Роботу не знайдено' });
         }
+        
+        console.log(`📋 Test ID: ${submission.test_id}, criteria_json: ${submission.criteria_json ? 'є' : 'немає'}, criteria_file: ${submission.criteria_file || 'немає'}`);
         
         if (submission.teacher_id !== req.user.id) {
             return res.status(403).json({ error: 'Це не ваша дисципліна' });
@@ -633,6 +644,7 @@ router.post('/:id/grade', authMiddleware, teacherOnly, async (req, res) => {
         let criteria = [];
         
         if (submission.criteria_json) {
+            console.log('✅ Використовую criteria_json');
             // Є JSON шаблон
             try {
                 templateData = JSON.parse(submission.criteria_json);
@@ -659,9 +671,12 @@ router.post('/:id/grade', authMiddleware, teacherOnly, async (req, res) => {
             }
         } else {
             // Fallback: беремо критерії з таблиці criteria
+            console.log('⚠️ criteria_json відсутній, шукаю в таблиці criteria...');
             const dbCriteria = queryAll(`
                 SELECT * FROM criteria WHERE test_id = @testId ORDER BY sort_order
             `, { testId: submission.test_id });
+            
+            console.log(`📊 Знайдено в таблиці criteria: ${dbCriteria.length} критеріїв`);
             
             if (dbCriteria.length > 0) {
                 criteria = dbCriteria.map((c, i) => ({
@@ -674,7 +689,10 @@ router.post('/:id/grade', authMiddleware, teacherOnly, async (req, res) => {
             }
         }
         
+        console.log(`📋 Всього критеріїв для оцінювання: ${criteria.length}`);
+        
         if (criteria.length === 0) {
+            console.log('❌ Критерії не знайдено!');
             return res.status(400).json({ 
                 error: 'Шаблон критеріїв не налаштовано для цього тесту. Завантажте Excel з критеріями при редагуванні тесту.',
                 need_template: true

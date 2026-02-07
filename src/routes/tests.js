@@ -157,12 +157,12 @@ router.post('/', authMiddleware, teacherOnly, uploadFields, async (req, res) => 
             return res.status(404).json({ error: 'Дисципліну не знайдено' });
         }
         
-        // Валідація дат
-        const startDate = new Date(start_time);
-        const endDate = new Date(end_time);
-        if (endDate <= startDate) {
+        // Валідація дат (порівнюємо як рядки - datetime-local формат сортується коректно)
+        if (end_time <= start_time) {
             return res.status(400).json({ error: 'Дата закінчення має бути після дати початку' });
         }
+        
+        // Зберігаємо час як є (локальний час користувача)
         
         let taskFilePath = null;
         let criteriaFilePath = null;
@@ -201,8 +201,8 @@ router.post('/', authMiddleware, teacherOnly, uploadFields, async (req, res) => 
             taskFile: taskFilePath,
             criteriaFile: criteriaFilePath,
             criteriaJson,
-            startTime: startDate.toISOString(),
-            endTime: endDate.toISOString(),
+            startTime: start_time,  // Зберігаємо локальний час напряму
+            endTime: end_time,      // Зберігаємо локальний час напряму
             maxPoints
         });
         
