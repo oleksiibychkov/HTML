@@ -51,7 +51,135 @@ async function initDatabase() {
     // ============================================
     // АВТОМАТИЧНІ МІГРАЦІЇ (виконуються при кожному старті)
     // ============================================
+    console.log('🔄 Перевірка структури бази даних...');
+    
     try {
+        // Таблиця користувачів
+        db.run(`
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY,
+                email TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                name TEXT NOT NULL,
+                role TEXT NOT NULL CHECK (role IN ('teacher', 'student')),
+                student_group TEXT,
+                course INTEGER,
+                is_active INTEGER DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+        
+        // Таблиця дисциплін
+        db.run(`
+            CREATE TABLE IF NOT EXISTS disciplines (
+                id INTEGER PRIMARY KEY,
+                teacher_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT,
+                is_active INTEGER DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (teacher_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        `);
+        
+        // Таблиця тестів
+        db.run(`
+            CREATE TABLE IF NOT EXISTS tests (
+                id INTEGER PRIMARY KEY,
+                discipline_id INTEGER NOT NULL,
+                type TEXT NOT NULL CHECK (type IN ('lab', 'control', 'exam')),
+                title TEXT NOT NULL,
+                description TEXT,
+                task_file TEXT,
+                criteria_file TEXT,
+                criteria_json TEXT,
+                start_time DATETIME NOT NULL,
+                end_time DATETIME NOT NULL,
+                max_points INTEGER DEFAULT 100,
+                is_active INTEGER DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (discipline_id) REFERENCES disciplines(id) ON DELETE CASCADE
+            )
+        `);
+        
+        // Таблиця критеріїв
+        db.run(`
+            CREATE TABLE IF NOT EXISTS criteria (
+                id INTEGER PRIMARY KEY,
+                test_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                max_points INTEGER NOT NULL,
+                description TEXT,
+                sort_order INTEGER DEFAULT 0,
+                FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE
+            )
+        `);
+        
+        // Таблиця здач
+        db.run(`
+            CREATE TABLE IF NOT EXISTS submissions (
+                id INTEGER PRIMARY KEY,
+                student_id INTEGER NOT NULL,
+                test_id INTEGER NOT NULL,
+                original_filename TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                extracted_text TEXT,
+                submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                status TEXT DEFAULT 'pending',
+                total_grade INTEGER,
+                ai_feedback TEXT,
+                ai_grades_json TEXT,
+                ai_info_json TEXT,
+                graded_at DATETIME,
+                FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE,
+                UNIQUE(student_id, test_id)
+            )
+        `);
+        
+        // Таблиця оцінок по критеріях
+        db.run(`
+            CREATE TABLE IF NOT EXISTS submission_grades (
+                id INTEGER PRIMARY KEY,
+                submission_id INTEGER NOT NULL,
+                criterion_id INTEGER NOT NULL,
+                points INTEGER NOT NULL,
+                comment TEXT,
+                FOREIGN KEY (submission_id) REFERENCES submissions(id) ON DELETE CASCADE,
+                FOREIGN KEY (criterion_id) REFERENCES criteria(id) ON DELETE CASCADE,
+                UNIQUE(submission_id, criterion_id)
+            )
+        `);
+        
+        // Таблиця сесій
+        db.run(`
+            CREATE TABLE IF NOT EXISTS sessions (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                token TEXT NOT NULL UNIQUE,
+                expires_at DATETIME NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        `);
+        
+        // Таблиця batch результатів
+        db.run(`
+            CREATE TABLE IF NOT EXISTS batch_results (
+                id INTEGER PRIMARY KEY,
+                teacher_id INTEGER NOT NULL,
+                discipline_name TEXT,
+                test_name TEXT,
+                result_file TEXT NOT NULL,
+                template_file TEXT,
+                works_count INTEGER DEFAULT 0,
+                success_count INTEGER DEFAULT 0,
+                error_count INTEGER DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (teacher_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        `);
+        
         // Таблиця запитів на повторну здачу (v19)
         db.run(`
             CREATE TABLE IF NOT EXISTS resubmit_requests (
@@ -69,17 +197,51 @@ async function initDatabase() {
         `);
         
         // Індекси для швидкого пошуку
+        db.run('CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)');
+        db.run('CREATE INDEX IF NOT EXISTS idx_disciplines_teacher ON disciplines(teacher_id)');
+        db.run('CREATE INDEX IF NOT EXISTS idx_tests_discipline ON tests(discipline_id)');
+        db.run('CREATE INDEX IF NOT EXISTS idx_criteria_test ON criteria(test_id)');
+        db.run('CREATE INDEX IF NOT EXISTS idx_submissions_student ON submissions(student_id)');
+        db.run('CREATE INDEX IF NOT EXISTS idx_submissions_test ON submissions(test_id)');
+        db.run('CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)');
+        db.run('CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)');
+        db.run('CREATE INDEX IF NOT EXISTS idx_batch_results_teacher ON batch_results(teacher_id)');
         db.run('CREATE INDEX IF NOT EXISTS idx_resubmit_requests_submission ON resubmit_requests(submission_id)');
         db.run('CREATE INDEX IF NOT EXISTS idx_resubmit_requests_student ON resubmit_requests(student_id)');
         db.run('CREATE INDEX IF NOT EXISTS idx_resubmit_requests_status ON resubmit_requests(status)');
         
         saveDatabase();
-        console.log('✅ Автоматичні міграції виконано');
-    } catch (err) {
-        // Ігноруємо помилки якщо таблиця вже існує
-        if (!err.message.includes('already exists')) {
-            console.log('ℹ️ Міграції:', err.message);
+        console.log('✅ Структура бази даних готова');
+        
+        // Перевіряємо чи є користувачі, якщо ні - створюємо демо
+        const userCount = db.exec('SELECT COUNT(*) FROM users');
+        const count = userCount[0]?.values[0]?.[0] || 0;
+        
+        if (count === 0) {
+            console.log('📝 Створюю демо-користувачів...');
+            const bcrypt = require('bcryptjs');
+            
+            // Викладач
+            const teacherHash = bcrypt.hashSync('teacher123', 10);
+            db.run(`
+                INSERT INTO users (email, password_hash, name, role)
+                VALUES ('teacher@test.com', '${teacherHash}', 'Іван Петренко', 'teacher')
+            `);
+            
+            // Студент
+            const studentHash = bcrypt.hashSync('student123', 10);
+            db.run(`
+                INSERT INTO users (email, password_hash, name, role, student_group, course)
+                VALUES ('student@test.com', '${studentHash}', 'Марія Коваленко', 'student', 'КН-21', 3)
+            `);
+            
+            saveDatabase();
+            console.log('✅ Демо-користувачі створені');
+            console.log('   Викладач: teacher@test.com / teacher123');
+            console.log('   Студент: student@test.com / student123');
         }
+    } catch (err) {
+        console.error('❌ Помилка міграції:', err.message);
     }
     
     return db;
