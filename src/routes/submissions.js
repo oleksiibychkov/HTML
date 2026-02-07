@@ -515,6 +515,37 @@ router.get('/', authMiddleware, (req, res) => {
 });
 
 // ============================================
+// СПИСОК ЗАПИТІВ НА ПОВТОРНУ ЗДАЧУ (викладач)
+// ВАЖЛИВО: Цей роут має бути ПЕРЕД /:id
+// ============================================
+router.get('/resubmit-requests', authMiddleware, teacherOnly, (req, res) => {
+    try {
+        // Використовуємо test_id з resubmit_requests напряму (не залежимо від submissions)
+        const requests = queryAll(`
+            SELECT rr.*, 
+                   u.name as student_name,
+                   u.student_group,
+                   t.title as test_title,
+                   d.name as discipline_name
+            FROM resubmit_requests rr
+            JOIN users u ON rr.student_id = u.id
+            JOIN tests t ON rr.test_id = t.id
+            JOIN disciplines d ON t.discipline_id = d.id
+            WHERE d.teacher_id = @teacherId
+            ORDER BY 
+                CASE rr.status WHEN 'pending' THEN 0 ELSE 1 END,
+                rr.created_at DESC
+        `, { teacherId: req.user.id });
+        
+        res.json({ requests });
+        
+    } catch (err) {
+        console.error('Помилка отримання запитів:', err);
+        res.status(500).json({ error: 'Помилка сервера' });
+    }
+});
+
+// ============================================
 // ДЕТАЛІ РОБОТИ
 // ============================================
 router.get('/:id', authMiddleware, (req, res) => {
@@ -1341,36 +1372,6 @@ router.post('/:id/resubmit-request', authMiddleware, studentOnly, (req, res) => 
         
     } catch (err) {
         console.error('Помилка створення запиту:', err);
-        res.status(500).json({ error: 'Помилка сервера' });
-    }
-});
-
-// ============================================
-// СПИСОК ЗАПИТІВ НА ПОВТОРНУ ЗДАЧУ (викладач)
-// ============================================
-router.get('/resubmit-requests', authMiddleware, teacherOnly, (req, res) => {
-    try {
-        // Використовуємо test_id з resubmit_requests напряму (не залежимо від submissions)
-        const requests = queryAll(`
-            SELECT rr.*, 
-                   u.name as student_name,
-                   u.student_group,
-                   t.title as test_title,
-                   d.name as discipline_name
-            FROM resubmit_requests rr
-            JOIN users u ON rr.student_id = u.id
-            JOIN tests t ON rr.test_id = t.id
-            JOIN disciplines d ON t.discipline_id = d.id
-            WHERE d.teacher_id = @teacherId
-            ORDER BY 
-                CASE rr.status WHEN 'pending' THEN 0 ELSE 1 END,
-                rr.created_at DESC
-        `, { teacherId: req.user.id });
-        
-        res.json({ requests });
-        
-    } catch (err) {
-        console.error('Помилка отримання запитів:', err);
         res.status(500).json({ error: 'Помилка сервера' });
     }
 });
