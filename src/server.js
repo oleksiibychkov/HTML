@@ -2,42 +2,31 @@
  * ============================================
  * ГОЛОВНИЙ ФАЙЛ СЕРВЕРА - TestHub
  * ============================================
- * Точка входу в додаток
  */
 
-// Завантажуємо змінні середовища з .env файлу
 require('dotenv').config();
 
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
 
-// Імпортуємо наші модулі
 const { initDatabase, closeDatabase } = require('./database/connection');
 
-// Створюємо Express додаток
 const app = express();
 
 // ============================================
-// MIDDLEWARE (проміжні обробники)
+// MIDDLEWARE
 // ============================================
 
-// Дозволяємо запити з інших доменів (для React)
 app.use(cors({
     origin: process.env.CORS_ORIGINS?.split(',') || ['http://localhost:3000', 'http://localhost:5173'],
     credentials: true
 }));
 
-// Парсимо JSON в тілі запитів
 app.use(express.json());
-
-// Парсимо URL-encoded дані (форми)
 app.use(express.urlencoded({ extended: true }));
-
-// Статичні файли (для завантажених PDF)
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
-// Логування запитів (простий варіант)
 app.use((req, res, next) => {
     const timestamp = new Date().toISOString();
     console.log(`[${timestamp}] ${req.method} ${req.path}`);
@@ -48,7 +37,6 @@ app.use((req, res, next) => {
 // МАРШРУТИ API
 // ============================================
 
-// Перевірка що сервер працює
 app.get('/api/health', (req, res) => {
     res.json({ 
         status: 'ok', 
@@ -57,7 +45,6 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-// Підключаємо маршрути (після ініціалізації БД)
 function setupRoutes() {
     const authRoutes = require('./routes/auth');
     const disciplinesRoutes = require('./routes/disciplines');
@@ -72,6 +59,20 @@ function setupRoutes() {
     app.use('/api/submissions', submissionsRoutes);
     app.use('/api/reports', reportsRoutes);
     app.use('/api/batch', batchRoutes);
+    
+    // ============================================
+    // СТАТИЧНІ ФАЙЛИ КЛІЄНТА (Production)
+    // ============================================
+    const clientDistPath = path.join(__dirname, '../client/dist');
+    
+    app.use(express.static(clientDistPath));
+    
+    app.get('*', (req, res, next) => {
+        if (req.path.startsWith('/api/')) {
+            return next();
+        }
+        res.sendFile(path.join(clientDistPath, 'index.html'));
+    });
 }
 
 // ============================================
@@ -79,7 +80,6 @@ function setupRoutes() {
 // ============================================
 
 function setupErrorHandlers() {
-    // 404 - маршрут не знайдено
     app.use((req, res) => {
         res.status(404).json({ 
             error: 'Маршрут не знайдено',
@@ -87,13 +87,10 @@ function setupErrorHandlers() {
         });
     });
 
-    // Глобальний обробник помилок
     app.use((err, req, res, next) => {
         console.error('Помилка сервера:', err);
-        
         res.status(err.status || 500).json({
             error: err.message || 'Внутрішня помилка сервера',
-            // В продакшені не показуємо деталі помилки
             ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
         });
     });
@@ -107,15 +104,12 @@ const PORT = process.env.PORT || 3000;
 
 async function startServer() {
     try {
-        // Ініціалізуємо базу даних
         console.log('⏳ Ініціалізація бази даних...');
         await initDatabase();
         
-        // Підключаємо маршрути
         setupRoutes();
         setupErrorHandlers();
         
-        // Запускаємо сервер
         app.listen(PORT, () => {
             console.log('');
             console.log('╔════════════════════════════════════════════╗');
@@ -134,7 +128,6 @@ async function startServer() {
     }
 }
 
-// Graceful shutdown
 process.on('SIGINT', () => {
     console.log('\n🛑 Зупинка сервера...');
     closeDatabase();
@@ -147,5 +140,4 @@ process.on('SIGTERM', () => {
     process.exit(0);
 });
 
-// Запускаємо
 startServer();
