@@ -1313,10 +1313,7 @@ router.post('/:id/resubmit-request', authMiddleware, studentOnly, (req, res) => 
         
         // Перевіряємо що це здача цього студента
         const submission = queryOne(`
-            SELECT s.*, t.title as test_title, d.name as discipline_name
-            FROM submissions s
-            JOIN tests t ON s.test_id = t.id
-            JOIN disciplines d ON t.discipline_id = d.id
+            SELECT s.* FROM submissions s
             WHERE s.id = @id AND s.student_id = @studentId
         `, { id: submissionId, studentId: req.user.id });
         
@@ -1340,9 +1337,7 @@ router.post('/:id/resubmit-request', authMiddleware, studentOnly, (req, res) => 
             VALUES (@submissionId, @studentId, @reason)
         `, { submissionId, studentId: req.user.id, reason: reason.trim() });
         
-        res.status(201).json({ 
-            message: 'Запит на повторну здачу надіслано. Очікуйте рішення викладача.' 
-        });
+        res.status(201).json({ message: 'Запит надіслано. Очікуйте рішення викладача.' });
         
     } catch (err) {
         console.error('Помилка створення запиту:', err);
@@ -1357,16 +1352,10 @@ router.get('/resubmit-requests', authMiddleware, teacherOnly, (req, res) => {
     try {
         const requests = queryAll(`
             SELECT rr.*, 
-                   s.original_filename,
-                   s.status as submission_status,
-                   s.total_grade,
                    u.name as student_name,
-                   u.email as student_email,
                    u.student_group,
                    t.title as test_title,
-                   t.id as test_id,
-                   d.name as discipline_name,
-                   d.id as discipline_id
+                   d.name as discipline_name
             FROM resubmit_requests rr
             JOIN submissions s ON rr.submission_id = s.id
             JOIN users u ON rr.student_id = u.id
@@ -1387,14 +1376,12 @@ router.get('/resubmit-requests', authMiddleware, teacherOnly, (req, res) => {
 });
 
 // ============================================
-// СХВАЛИТИ ЗАПИТ НА ПОВТОРНУ ЗДАЧУ (викладач)
+// СХВАЛИТИ ЗАПИТ (викладач)
 // ============================================
 router.post('/resubmit-requests/:id/approve', authMiddleware, teacherOnly, (req, res) => {
     try {
         const requestId = parseInt(req.params.id);
-        const { comment } = req.body;
         
-        // Отримуємо запит
         const request = queryOne(`
             SELECT rr.*, d.teacher_id, s.file_path
             FROM resubmit_requests rr
@@ -1416,9 +1403,9 @@ router.post('/resubmit-requests/:id/approve', authMiddleware, teacherOnly, (req,
             return res.status(400).json({ error: 'Запит вже розглянуто' });
         }
         
-        // Видаляємо стару здачу (та її файл)
+        // Видаляємо стару здачу
         if (request.file_path) {
-            const filePath = path.join(uploadsDir, request.file_path);
+            const filePath = path.join(__dirname, '../../uploads', request.file_path);
             if (fs.existsSync(filePath)) {
                 fs.unlinkSync(filePath);
             }
@@ -1428,13 +1415,11 @@ router.post('/resubmit-requests/:id/approve', authMiddleware, teacherOnly, (req,
         // Оновлюємо статус запиту
         execute(`
             UPDATE resubmit_requests 
-            SET status = 'approved', 
-                teacher_comment = @comment, 
-                resolved_at = CURRENT_TIMESTAMP
+            SET status = 'approved', teacher_comment = 'Дозволено', resolved_at = CURRENT_TIMESTAMP
             WHERE id = @id
-        `, { id: requestId, comment: comment || 'Дозволено' });
+        `, { id: requestId });
         
-        res.json({ message: 'Запит схвалено. Студент може здати роботу повторно.' });
+        res.json({ message: 'Запит схвалено. Студент може здати повторно.' });
         
     } catch (err) {
         console.error('Помилка схвалення:', err);
@@ -1443,7 +1428,7 @@ router.post('/resubmit-requests/:id/approve', authMiddleware, teacherOnly, (req,
 });
 
 // ============================================
-// ВІДХИЛИТИ ЗАПИТ НА ПОВТОРНУ ЗДАЧУ (викладач)
+// ВІДХИЛИТИ ЗАПИТ (викладач)
 // ============================================
 router.post('/resubmit-requests/:id/reject', authMiddleware, teacherOnly, (req, res) => {
     try {
@@ -1454,7 +1439,6 @@ router.post('/resubmit-requests/:id/reject', authMiddleware, teacherOnly, (req, 
             return res.status(400).json({ error: 'Вкажіть причину відмови' });
         }
         
-        // Отримуємо запит
         const request = queryOne(`
             SELECT rr.*, d.teacher_id
             FROM resubmit_requests rr
@@ -1464,24 +1448,17 @@ router.post('/resubmit-requests/:id/reject', authMiddleware, teacherOnly, (req, 
             WHERE rr.id = @id
         `, { id: requestId });
         
-        if (!request) {
+        if (!request || request.teacher_id !== req.user.id) {
             return res.status(404).json({ error: 'Запит не знайдено' });
-        }
-        
-        if (request.teacher_id !== req.user.id) {
-            return res.status(403).json({ error: 'Це не ваша дисципліна' });
         }
         
         if (request.status !== 'pending') {
             return res.status(400).json({ error: 'Запит вже розглянуто' });
         }
         
-        // Оновлюємо статус
         execute(`
             UPDATE resubmit_requests 
-            SET status = 'rejected', 
-                teacher_comment = @comment, 
-                resolved_at = CURRENT_TIMESTAMP
+            SET status = 'rejected', teacher_comment = @comment, resolved_at = CURRENT_TIMESTAMP
             WHERE id = @id
         `, { id: requestId, comment: comment.trim() });
         
@@ -1494,13 +1471,12 @@ router.post('/resubmit-requests/:id/reject', authMiddleware, teacherOnly, (req, 
 });
 
 // ============================================
-// ДОЗВОЛИТИ ПОВТОРНУ ЗДАЧУ БЕЗ ЗАПИТУ (викладач)
+// ДОЗВОЛИТИ ПЕРЕЗДАЧУ БЕЗ ЗАПИТУ (викладач)
 // ============================================
 router.post('/:id/allow-resubmit', authMiddleware, teacherOnly, (req, res) => {
     try {
         const submissionId = parseInt(req.params.id);
         
-        // Перевіряємо здачу
         const submission = queryOne(`
             SELECT s.*, d.teacher_id, u.name as student_name
             FROM submissions s
@@ -1510,37 +1486,20 @@ router.post('/:id/allow-resubmit', authMiddleware, teacherOnly, (req, res) => {
             WHERE s.id = @id
         `, { id: submissionId });
         
-        if (!submission) {
+        if (!submission || submission.teacher_id !== req.user.id) {
             return res.status(404).json({ error: 'Здачу не знайдено' });
         }
         
-        if (submission.teacher_id !== req.user.id) {
-            return res.status(403).json({ error: 'Це не ваша дисципліна' });
-        }
-        
-        // Видаляємо файл
+        // Видаляємо файл та здачу
         if (submission.file_path) {
-            const filePath = path.join(uploadsDir, submission.file_path);
+            const filePath = path.join(__dirname, '../../uploads', submission.file_path);
             if (fs.existsSync(filePath)) {
                 fs.unlinkSync(filePath);
             }
         }
-        
-        // Видаляємо здачу
         execute('DELETE FROM submissions WHERE id = @id', { id: submissionId });
         
-        // Скасовуємо всі pending запити для цієї здачі
-        execute(`
-            UPDATE resubmit_requests 
-            SET status = 'approved', 
-                teacher_comment = 'Викладач дозволив повторну здачу', 
-                resolved_at = CURRENT_TIMESTAMP
-            WHERE submission_id = @submissionId AND status = 'pending'
-        `, { submissionId });
-        
-        res.json({ 
-            message: `Повторну здачу дозволено для ${submission.student_name}` 
-        });
+        res.json({ message: `Перездачу дозволено для ${submission.student_name}` });
         
     } catch (err) {
         console.error('Помилка:', err);
@@ -1549,7 +1508,7 @@ router.post('/:id/allow-resubmit', authMiddleware, teacherOnly, (req, res) => {
 });
 
 // ============================================
-// СТАТУС ЗАПИТУ НА ПОВТОРНУ ЗДАЧУ (студент)
+// СТАТУС ЗАПИТУ (студент)
 // ============================================
 router.get('/:id/resubmit-status', authMiddleware, studentOnly, (req, res) => {
     try {
@@ -1558,8 +1517,7 @@ router.get('/:id/resubmit-status', authMiddleware, studentOnly, (req, res) => {
         const request = queryOne(`
             SELECT * FROM resubmit_requests 
             WHERE submission_id = @submissionId AND student_id = @studentId
-            ORDER BY created_at DESC
-            LIMIT 1
+            ORDER BY created_at DESC LIMIT 1
         `, { submissionId, studentId: req.user.id });
         
         res.json({ request: request || null });

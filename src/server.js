@@ -117,6 +117,44 @@ function setupErrorHandlers() {
 }
 
 // ============================================
+// МІГРАЦІЇ БАЗИ ДАНИХ
+// ============================================
+async function runMigrations() {
+    const { getDb, saveDatabase } = require('./database/connection');
+    const db = getDb();
+    
+    console.log('🔄 Перевірка міграцій...');
+    
+    try {
+        // v19: Таблиця запитів на повторну здачу
+        db.run(`
+            CREATE TABLE IF NOT EXISTS resubmit_requests (
+                id INTEGER PRIMARY KEY,
+                submission_id INTEGER NOT NULL,
+                student_id INTEGER NOT NULL,
+                reason TEXT NOT NULL,
+                status TEXT DEFAULT 'pending',
+                teacher_comment TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                resolved_at DATETIME,
+                FOREIGN KEY (submission_id) REFERENCES submissions(id) ON DELETE CASCADE,
+                FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        `);
+        db.run('CREATE INDEX IF NOT EXISTS idx_resubmit_requests_submission ON resubmit_requests(submission_id)');
+        db.run('CREATE INDEX IF NOT EXISTS idx_resubmit_requests_status ON resubmit_requests(status)');
+        
+        saveDatabase();
+        console.log('✅ Міграції виконано');
+    } catch (err) {
+        // Ігноруємо помилки "already exists"
+        if (!err.message.includes('already exists')) {
+            console.log('ℹ️ Міграції:', err.message);
+        }
+    }
+}
+
+// ============================================
 // ЗАПУСК СЕРВЕРА
 // ============================================
 
@@ -127,6 +165,9 @@ async function startServer() {
         // Ініціалізуємо базу даних
         console.log('⏳ Ініціалізація бази даних...');
         await initDatabase();
+        
+        // Запускаємо міграції (створюємо нові таблиці якщо їх немає)
+        await runMigrations();
         
         // Підключаємо маршрути
         setupRoutes();
