@@ -48,6 +48,40 @@ async function initDatabase() {
     // Вмикаємо foreign keys
     db.run('PRAGMA foreign_keys = ON');
     
+    // ============================================
+    // АВТОМАТИЧНІ МІГРАЦІЇ (виконуються при кожному старті)
+    // ============================================
+    try {
+        // Таблиця запитів на повторну здачу (v19)
+        db.run(`
+            CREATE TABLE IF NOT EXISTS resubmit_requests (
+                id INTEGER PRIMARY KEY,
+                submission_id INTEGER NOT NULL,
+                student_id INTEGER NOT NULL,
+                reason TEXT NOT NULL,
+                status TEXT DEFAULT 'pending',
+                teacher_comment TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                resolved_at DATETIME,
+                FOREIGN KEY (submission_id) REFERENCES submissions(id) ON DELETE CASCADE,
+                FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        `);
+        
+        // Індекси для швидкого пошуку
+        db.run('CREATE INDEX IF NOT EXISTS idx_resubmit_requests_submission ON resubmit_requests(submission_id)');
+        db.run('CREATE INDEX IF NOT EXISTS idx_resubmit_requests_student ON resubmit_requests(student_id)');
+        db.run('CREATE INDEX IF NOT EXISTS idx_resubmit_requests_status ON resubmit_requests(status)');
+        
+        saveDatabase();
+        console.log('✅ Автоматичні міграції виконано');
+    } catch (err) {
+        // Ігноруємо помилки якщо таблиця вже існує
+        if (!err.message.includes('already exists')) {
+            console.log('ℹ️ Міграції:', err.message);
+        }
+    }
+    
     return db;
 }
 
