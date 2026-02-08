@@ -19,11 +19,11 @@ jobs:
       - name: Stop
         if: inputs.action == 'stop' || github.event.schedule == '0 21 * * *'
         run: |
-          curl -X POST "https://backboard.railway.app/graphql/v2" -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" -H "Content-Type: application/json" -d '{"query":"mutation{serviceInstanceUpdate(serviceId:\"${{ secrets.RAILWAY_SERVICE_ID }}\",input:{numReplicas:0})}"}'
+          curl -X POST "https://backboard.railway.app/graphql/v2" -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" -H "Content-Type: application/json" -d '{"query":"mutation{serviceInstanceUpdate(serviceId:\"${{ secrets.RAILWAY_SERVICE_ID }}\",environmentId:\"${{ secrets.RAILWAY_ENV_ID }}\",input:{numReplicas:0})}"}'
           echo "Stopped"
 
       - name: Start
         if: inputs.action == 'start' || github.event.schedule == '0 5 * * *'
         run: |
-          curl -X POST "https://backboard.railway.app/graphql/v2" -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" -H "Content-Type: application/json" -d '{"query":"mutation{serviceInstanceUpdate(serviceId:\"${{ secrets.RAILWAY_SERVICE_ID }}\",input:{numReplicas:1})}"}'
+          curl -X POST "https://backboard.railway.app/graphql/v2" -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" -H "Content-Type: application/json" -d '{"query":"mutation{serviceInstanceUpdate(serviceId:\"${{ secrets.RAILWAY_SERVICE_ID }}\",environmentId:\"${{ secrets.RAILWAY_ENV_ID }}\",input:{numReplicas:1})}"}'
           echo "Started"
