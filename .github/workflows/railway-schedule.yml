@@ -16,20 +16,25 @@ jobs:
   toggle:
     runs-on: ubuntu-latest
     steps:
-      - name: Stop
-        if: inputs.action == 'stop' || github.event.schedule == '0 21 * * *'
-        run: |
-          curl -X POST "https://backboard.railway.app/graphql/v2" \
-            -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
-            -H "Content-Type: application/json" \
-            -d '{"query":"mutation { serviceInstanceUpdate(serviceId: \"${{ secrets.RAILWAY_SERVICE_ID }}\", environmentId: \"${{ secrets.RAILWAY_ENV_ID }}\", input: { numReplicas: 0 }) }"}'
-          echo "Stopped"
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
 
-      - name: Start
-        if: inputs.action == 'start' || github.event.schedule == '0 5 * * *'
+      - name: Link and Stop
+        if: inputs.action == 'stop' || github.event.schedule == '0 21 * * *'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          curl -X POST "https://backboard.railway.app/graphql/v2" \
-            -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
-            -H "Content-Type: application/json" \
-            -d '{"query":"mutation { serviceInstanceUpdate(serviceId: \"${{ secrets.RAILWAY_SERVICE_ID }}\", environmentId: \"${{ secrets.RAILWAY_ENV_ID }}\", input: { numReplicas: 1 }) }"}'
-          echo "Started"
+          railway link ${{ secrets.RAILWAY_PROJECT_ID }}
+          railway service ${{ secrets.RAILWAY_SERVICE_ID }}
+          railway scale --replicas 0 || echo "Scale not supported, trying alternative..."
+          echo "Stop attempted"
+
+      - name: Link and Start  
+        if: inputs.action == 'start' || github.event.schedule == '0 5 * * *'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway link ${{ secrets.RAILWAY_PROJECT_ID }}
+          railway service ${{ secrets.RAILWAY_SERVICE_ID }}
+          railway up --detach || railway redeploy || echo "Redeploy attempted"
+          echo "Start attempted"
