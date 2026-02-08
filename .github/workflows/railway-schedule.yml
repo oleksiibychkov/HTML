@@ -16,14 +16,23 @@ jobs:
   toggle:
     runs-on: ubuntu-latest
     steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
       - name: Stop
         if: inputs.action == 'stop' || github.event.schedule == '0 21 * * *'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          curl -X POST "https://backboard.railway.app/graphql/v2" -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" -H "Content-Type: application/json" -d '{"query":"mutation{serviceInstanceUpdate(serviceId:\"${{ secrets.RAILWAY_SERVICE_ID }}\",environmentId:\"${{ secrets.RAILWAY_ENV_ID }}\",input:{numReplicas:0})}"}'
+          railway service -s ${{ secrets.RAILWAY_SERVICE_ID }}
+          railway down -y
           echo "Stopped"
 
       - name: Start
         if: inputs.action == 'start' || github.event.schedule == '0 5 * * *'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          curl -X POST "https://backboard.railway.app/graphql/v2" -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" -H "Content-Type: application/json" -d '{"query":"mutation{serviceInstanceUpdate(serviceId:\"${{ secrets.RAILWAY_SERVICE_ID }}\",environmentId:\"${{ secrets.RAILWAY_ENV_ID }}\",input:{numReplicas:1})}"}'
+          railway service -s ${{ secrets.RAILWAY_SERVICE_ID }}
+          railway up
           echo "Started"
