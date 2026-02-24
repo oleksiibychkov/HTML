@@ -259,11 +259,6 @@ function LoginForm({ setView, showNotification }) {
           </button>
         </div>
 
-        <div style={styles.demoCredentials}>
-          <p style={styles.demoTitle}>Демо доступ:</p>
-          <p>Викладач: teacher@test.com / teacher123</p>
-          <p>Студент: student@test.com / student123</p>
-        </div>
       </div>
     </div>
   );
