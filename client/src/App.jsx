@@ -883,14 +883,20 @@ function DisciplineDetails({ discipline, onClose, showNotification, onUpdate }) 
                       📄 Завдання (PDF)
                     </button>
                   )}
-                  {test.criteria_file ? (
-                    <span style={detailStyles.fileInfo}>📊 Excel критеріїв завантажено</span>
-                  ) : (
-                    <span style={{ ...detailStyles.fileInfo, color: '#f59e0b' }}>⚠️ Шаблон критеріїв не завантажено</span>
+                  {test.grading_method !== 'quiz' && (
+                    test.criteria_file ? (
+                      <span style={detailStyles.fileInfo}>📊 Excel критеріїв завантажено</span>
+                    ) : (
+                      <span style={{ ...detailStyles.fileInfo, color: '#f59e0b' }}>⚠️ Шаблон критеріїв не завантажено</span>
+                    )
+                  )}
+                  {test.grading_method === 'quiz' && test.quiz_questions?.length > 0 && (
+                    <span style={{ ...detailStyles.fileInfo, color: '#10b981' }}>📋 {test.quiz_questions.length} quiz-питань</span>
                   )}
                 </div>
-                
-                {/* Кнопка оновлення шаблону критеріїв */}
+
+                {/* Кнопка оновлення шаблону критеріїв (не для quiz) */}
+                {test.grading_method !== 'quiz' && (
                 <div style={{ marginTop: '10px' }}>
                   <input
                     type="file"
@@ -900,10 +906,10 @@ function DisciplineDetails({ discipline, onClose, showNotification, onUpdate }) 
                     onChange={async (e) => {
                       const file = e.target.files[0];
                       if (!file) return;
-                      
+
                       const formData = new FormData();
                       formData.append('criteria_file', file);
-                      
+
                       try {
                         const response = await fetch(`${API_URL}/tests/${test.id}/update-criteria`, {
                           method: 'POST',
@@ -920,10 +926,10 @@ function DisciplineDetails({ discipline, onClose, showNotification, onUpdate }) 
                       e.target.value = '';
                     }}
                   />
-                  <label 
+                  <label
                     htmlFor={`criteria-upload-${test.id}`}
-                    style={{ 
-                      ...detailStyles.fileBtn, 
+                    style={{
+                      ...detailStyles.fileBtn,
                       display: 'inline-block',
                       cursor: 'pointer',
                       background: test.criteria_file ? 'rgba(59, 130, 246, 0.1)' : 'rgba(245, 158, 11, 0.2)',
@@ -934,7 +940,8 @@ function DisciplineDetails({ discipline, onClose, showNotification, onUpdate }) 
                     {test.criteria_file ? '📊 Оновити шаблон критеріїв' : '📊 Завантажити шаблон критеріїв'}
                   </label>
                 </div>
-                
+                )}
+
                 {/* Кнопка оцінювання */}
                 {(test.submissions_count || 0) > (test.graded_count || 0) && (
                   <div style={detailStyles.gradeSection}>

@@ -872,16 +872,17 @@ router.post('/:id/grade', authMiddleware, teacherOnly, async (req, res) => {
         
         // Отримуємо роботу з усією інформацією
         const submission = queryOne(`
-            SELECT s.*, 
+            SELECT s.*,
                    u.name as student_name,
                    u.email as student_email,
                    u.student_group,
-                   d.teacher_id, 
+                   d.teacher_id,
                    d.name as discipline_name,
                    t.title as test_title,
                    t.max_points,
                    t.criteria_json,
-                   t.criteria_file
+                   t.criteria_file,
+                   t.grading_method
             FROM submissions s
             JOIN users u ON s.student_id = u.id
             JOIN tests t ON s.test_id = t.id
@@ -903,7 +904,159 @@ router.post('/:id/grade', authMiddleware, teacherOnly, async (req, res) => {
         if (submission.status === 'graded') {
             return res.status(400).json({ error: 'Робота вже оцінена' });
         }
-        
+
+        // ========== QUIZ — окрема логіка оцінювання ==========
+        if (submission.grading_method === 'quiz') {
+            const { gradeQuizAnswers, buildAIPromptForUnanswered } = require('../quiz-checker');
+
+            execute('UPDATE submissions SET status = @status WHERE id = @id', { id: submissionId, status: 'grading' });
+
+            // Завантажуємо quiz-питання
+            const quizQuestions = queryAll(`
+                SELECT * FROM quiz_questions WHERE test_id = @testId ORDER BY sort_order
+            `, { testId: submission.test_id });
+
+            // Визначаємо набір питань для цього студента
+            let studentQuestions = quizQuestions;
+            const studentSet = queryOne(`
+                SELECT question_ids_json FROM quiz_student_sets
+                WHERE test_id = @testId AND student_id = @studentId
+            `, { testId: submission.test_id, studentId: submission.student_id });
+
+            if (studentSet) {
+                const selectedIds = new Set(JSON.parse(studentSet.question_ids_json));
+                studentQuestions = quizQuestions.filter(q => selectedIds.has(q.id));
+            }
+
+            // Завантажуємо відповіді студента
+            const studentQuizAnswers = queryAll(`
+                SELECT qa.*, qq.question_number
+                FROM quiz_answers qa
+                JOIN quiz_questions qq ON qa.quiz_question_id = qq.id
+                WHERE qa.submission_id = @subId
+            `, { subId: submissionId });
+
+            if (studentQuizAnswers.length === 0) {
+                execute('UPDATE submissions SET status = @status WHERE id = @id', { id: submissionId, status: 'error' });
+                return res.status(400).json({ error: 'Немає quiz-відповідей для цієї роботи' });
+            }
+
+            // Формуємо answersMap
+            const answersMap = {};
+            for (const a of studentQuizAnswers) {
+                answersMap[a.quiz_question_id] = a.student_answer;
+            }
+
+            // Детерміністична перевірка
+            const quizResult = gradeQuizAnswers(studentQuestions, answersMap);
+
+            // Оновлюємо quiz_answers
+            for (const r of quizResult.results) {
+                try {
+                    execute(`
+                        UPDATE quiz_answers SET is_correct = @isCorrect, points_earned = @pointsEarned
+                        WHERE submission_id = @subId AND quiz_question_id = @qId
+                    `, { isCorrect: r.isCorrect ? 1 : 0, pointsEarned: r.pointsEarned, subId: submissionId, qId: r.questionId });
+                } catch (e) { /* ігноруємо */ }
+            }
+
+            // AI для питань без відповіді
+            let aiEarned = 0;
+            const apiKey = process.env.ANTHROPIC_API_KEY;
+            if (quizResult.needsAI.length > 0 && apiKey) {
+                try {
+                    const aiPrompt = buildAIPromptForUnanswered(quizResult.needsAI);
+                    const aiResp = await fetch('https://api.anthropic.com/v1/messages', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+                        body: JSON.stringify({ model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514', max_tokens: 2000, messages: [{ role: 'user', content: aiPrompt }] })
+                    });
+                    if (aiResp.ok) {
+                        const aiData = await aiResp.json();
+                        const aiText = aiData.content?.[0]?.text || '';
+                        const jsonMatch = aiText.match(/\{[\s\S]*\}/);
+                        if (jsonMatch) {
+                            const aiResult = JSON.parse(jsonMatch[0]);
+                            for (const ans of (aiResult.answers || [])) {
+                                const needQ = quizResult.needsAI.find(q => q.questionNumber === ans.questionNumber);
+                                if (needQ) {
+                                    const pts = ans.isCorrect ? needQ.maxPoints : 0;
+                                    aiEarned += pts;
+                                    try {
+                                        execute(`UPDATE quiz_answers SET is_correct = @isCorrect, points_earned = @pts, ai_explanation = @expl WHERE submission_id = @subId AND quiz_question_id = @qId`,
+                                            { isCorrect: ans.isCorrect ? 1 : 0, pts, expl: ans.explanation || null, subId: submissionId, qId: needQ.questionId });
+                                    } catch (e) { /* ігноруємо */ }
+                                }
+                            }
+                        }
+                    }
+                } catch (aiErr) { console.error('Quiz AI помилка:', aiErr.message); }
+            }
+
+            // AI оцінка пояснень
+            let explanationBonus = 0;
+            const explanationsToCheck = studentQuizAnswers
+                .filter(a => a.student_explanation && a.student_explanation.trim().length > 0)
+                .map(a => {
+                    const q = studentQuestions.find(sq => sq.id === a.quiz_question_id);
+                    return q ? { questionId: a.quiz_question_id, questionNumber: q.question_number, questionText: q.question_text, optionA: q.option_a, optionB: q.option_b, optionC: q.option_c, optionD: q.option_d, correctAnswer: q.correct_answer || null, studentAnswer: a.student_answer, explanation: a.student_explanation } : null;
+                }).filter(Boolean);
+
+            if (explanationsToCheck.length > 0 && apiKey) {
+                try {
+                    const explText = explanationsToCheck.map((e, i) =>
+                        `${i + 1}. Тест ${e.questionNumber}: ${e.questionText}\n   A) ${e.optionA || '—'}  B) ${e.optionB || '—'}  C) ${e.optionC || '—'}  D) ${e.optionD || '—'}\n` +
+                        (e.correctAnswer ? `   Правильна відповідь: ${e.correctAnswer}\n` : '') +
+                        `   Відповідь студента: ${e.studentAnswer}\n   Пояснення студента: "${e.explanation}"`
+                    ).join('\n\n');
+
+                    const explPrompt = `Ти — експерт, який оцінює пояснення студентів до тестових відповідей (multiple choice A/B/C/D).\n\nДля кожного питання оціни якість пояснення від 0 до 2 додаткових балів:\n- 0 — пояснення нерелевантне або демонструє нерозуміння\n- 1 — часткове пояснення\n- 2 — повне, грамотне пояснення\n\nПИТАННЯ:\n${explText}\n\nВідповідь ТІЛЬКИ у JSON:\n{"scores": [{"questionNumber": "N.M", "score": 0, "feedback": "..."}]}`;
+
+                    const explResp = await fetch('https://api.anthropic.com/v1/messages', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+                        body: JSON.stringify({ model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514', max_tokens: 2000, messages: [{ role: 'user', content: explPrompt }] })
+                    });
+                    if (explResp.ok) {
+                        const explData = await explResp.json();
+                        const explJsonText = explData.content?.[0]?.text || '';
+                        const explJsonMatch = explJsonText.match(/\{[\s\S]*\}/);
+                        if (explJsonMatch) {
+                            const explResult = JSON.parse(explJsonMatch[0]);
+                            for (const sc of (explResult.scores || [])) {
+                                const expl = explanationsToCheck.find(e => e.questionNumber === sc.questionNumber);
+                                if (expl && typeof sc.score === 'number' && sc.score >= 0 && sc.score <= 2) {
+                                    explanationBonus += sc.score;
+                                    try {
+                                        execute(`UPDATE quiz_answers SET explanation_score = @score WHERE submission_id = @subId AND quiz_question_id = @qId`,
+                                            { score: sc.score, subId: submissionId, qId: expl.questionId });
+                                    } catch (e) { /* ігноруємо */ }
+                                }
+                            }
+                        }
+                    }
+                } catch (explErr) { console.error('Quiz explanation AI:', explErr.message); }
+            }
+
+            const totalGrade = quizResult.earnedPoints + aiEarned + explanationBonus;
+            const correctCount = quizResult.results.filter(r => r.isCorrect).length;
+            let feedback = `Quiz: ${totalGrade}/${quizResult.totalPoints} балів\nПравильних: ${correctCount}/${studentQuizAnswers.length} (з ${studentQuestions.length} питань)`;
+            if (explanationBonus > 0) feedback += `\nБонус за пояснення: +${explanationBonus} б.`;
+            if (quizResult.needsAI.length > 0) feedback += `\n(${quizResult.needsAI.length} питань перевірено AI)`;
+
+            execute(`
+                UPDATE submissions SET status = 'graded', total_grade = @grade, ai_feedback = @feedback, graded_at = datetime('now')
+                WHERE id = @id
+            `, { grade: totalGrade, feedback, id: submissionId });
+
+            const updated = queryOne('SELECT * FROM submissions WHERE id = @id', { id: submissionId });
+            return res.json({
+                message: 'Роботу оцінено',
+                submission: { ...updated, max_points: submission.max_points }
+            });
+        }
+
+        // ========== Стандартне AI/Math оцінювання ==========
         // Парсимо шаблон критеріїв
         let templateData;
         let columns = [];
