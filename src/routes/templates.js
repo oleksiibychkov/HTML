@@ -59,14 +59,14 @@ const TEMPLATE_META = {
         icon: '📝',
         forRole: 'all'
     },
-    'guide_student.md': {
+    'guide_student.pdf': {
         name: 'Інструкція для студентів',
         description: 'Оформлення робіт у Markdown, формули LaTeX, конвертація в PDF, шаблони',
         category: 'guides',
         icon: '📚',
         forRole: 'all'
     },
-    'guide_teacher.md': {
+    'guide_teacher.pdf': {
         name: 'Інструкція для викладачів',
         description: 'Як створювати Excel-шаблони критеріїв оцінювання, типи стовпців',
         category: 'guides',
