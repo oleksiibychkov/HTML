@@ -1565,6 +1565,27 @@ function AddTestModal({ disciplineId, onClose, onAdd }) {
 // ============================================
 function SubmissionsList({ submissions, showNotification, onUpdate, onAllowResubmit }) {
   const [grading, setGrading] = useState(null);
+  const [expandedSub, setExpandedSub] = useState(null);
+  const [quizDetails, setQuizDetails] = useState(null);
+  const [loadingDetails, setLoadingDetails] = useState(false);
+
+  const toggleQuizDetails = async (sub) => {
+    if (expandedSub === sub.id) {
+      setExpandedSub(null);
+      setQuizDetails(null);
+      return;
+    }
+    setExpandedSub(sub.id);
+    setLoadingDetails(true);
+    try {
+      const data = await api(`/submissions/${sub.id}`);
+      setQuizDetails(data.submission?.quiz_results || []);
+    } catch (err) {
+      showNotification(err.message, 'error');
+      setQuizDetails([]);
+    }
+    setLoadingDetails(false);
+  };
 
   const gradeWithBI = async (submissionId) => {
     setGrading(submissionId);
@@ -1657,7 +1678,110 @@ function SubmissionsList({ submissions, showNotification, onUpdate, onAllowResub
                   🔄 Дозволити перездачу
                 </button>
               )}
+              {/* Кнопка деталей quiz */}
+              {sub.grading_method === 'quiz' && sub.status === 'graded' && (
+                <button
+                  onClick={() => toggleQuizDetails(sub)}
+                  style={{
+                    marginLeft: '10px',
+                    padding: '8px 16px',
+                    background: expandedSub === sub.id ? 'rgba(16, 185, 129, 0.3)' : 'rgba(16, 185, 129, 0.1)',
+                    border: '1px solid #10b981',
+                    borderRadius: '8px',
+                    color: '#10b981',
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                    fontFamily: 'inherit'
+                  }}
+                >
+                  {expandedSub === sub.id ? '▲ Сховати відповіді' : '▼ Показати відповіді'}
+                </button>
+              )}
             </div>
+
+            {/* Quiz деталі */}
+            {expandedSub === sub.id && (
+              <div style={{ marginTop: '12px', borderTop: '1px solid #334155', paddingTop: '12px' }}>
+                {loadingDetails ? (
+                  <p style={{ color: '#94a3b8', fontSize: '13px' }}>Завантаження...</p>
+                ) : quizDetails && quizDetails.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {quizDetails.map((r, idx) => (
+                      <div key={idx} style={{
+                        background: 'rgba(15, 23, 42, 0.5)',
+                        border: `1px solid ${r.is_correct ? '#10b981' : '#ef4444'}`,
+                        borderRadius: '10px',
+                        padding: '14px'
+                      }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                          <span style={{ color: '#10b981', fontWeight: '700', fontSize: '13px' }}>
+                            Тест {r.question_number}
+                          </span>
+                          <span style={{
+                            fontSize: '12px',
+                            padding: '2px 8px',
+                            borderRadius: '6px',
+                            background: r.is_correct ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+                            color: r.is_correct ? '#10b981' : '#ef4444',
+                            fontWeight: '600'
+                          }}>
+                            {r.is_correct ? '✅ Правильно' : '❌ Неправильно'} ({r.points_earned}/{r.max_points} б.)
+                          </span>
+                        </div>
+                        <p style={{ color: '#e2e8f0', fontSize: '13px', marginBottom: '6px', lineHeight: '1.5' }}>
+                          {r.question_text}
+                        </p>
+                        <div style={{ display: 'flex', gap: '12px', fontSize: '13px', marginBottom: r.student_explanation ? '8px' : '0' }}>
+                          <span style={{ color: '#94a3b8' }}>
+                            Відповідь: <strong style={{ color: r.is_correct ? '#10b981' : '#ef4444' }}>{r.student_answer}</strong>
+                          </span>
+                          {r.correct_answer && (
+                            <span style={{ color: '#94a3b8' }}>
+                              Правильна: <strong style={{ color: '#10b981' }}>{r.correct_answer}</strong>
+                            </span>
+                          )}
+                          {r.explanation_score > 0 && (
+                            <span style={{ color: '#f59e0b' }}>
+                              Бонус за пояснення: +{r.explanation_score} б.
+                            </span>
+                          )}
+                        </div>
+                        {r.student_explanation && (
+                          <div style={{
+                            background: 'rgba(30, 41, 59, 0.6)',
+                            borderRadius: '8px',
+                            padding: '10px 12px',
+                            borderLeft: '3px solid #3b82f6'
+                          }}>
+                            <span style={{ color: '#64748b', fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                              Пояснення студента:
+                            </span>
+                            <p style={{ color: '#cbd5e1', fontSize: '13px', lineHeight: '1.5', marginTop: '4px', whiteSpace: 'pre-wrap' }}>
+                              {r.student_explanation}
+                            </p>
+                            {r.explanation_score !== null && r.explanation_score !== undefined && (
+                              <span style={{
+                                display: 'inline-block',
+                                marginTop: '6px',
+                                fontSize: '11px',
+                                padding: '2px 8px',
+                                borderRadius: '4px',
+                                background: r.explanation_score >= 2 ? 'rgba(16, 185, 129, 0.2)' : r.explanation_score >= 1 ? 'rgba(245, 158, 11, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+                                color: r.explanation_score >= 2 ? '#10b981' : r.explanation_score >= 1 ? '#f59e0b' : '#ef4444'
+                              }}>
+                                Оцінка пояснення: {r.explanation_score}/2
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p style={{ color: '#94a3b8', fontSize: '13px' }}>Немає деталей</p>
+                )}
+              </div>
+            )}
           </div>
         ))}
       </div>

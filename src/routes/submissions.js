@@ -637,14 +637,15 @@ router.get('/', authMiddleware, (req, res) => {
             const { discipline_id, test_id, status } = req.query;
             
             let sql = `
-                SELECT s.*, 
-                       u.name as student_name, 
+                SELECT s.*,
+                       u.name as student_name,
                        u.email as student_email,
                        u.student_group,
                        t.title as test_title,
                        t.type as test_type,
                        t.max_points,
                        t.criteria_json,
+                       t.grading_method,
                        d.name as discipline_name
                 FROM submissions s
                 JOIN users u ON s.student_id = u.id
