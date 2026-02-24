@@ -886,7 +886,12 @@ function DisciplineDetails({ discipline, onClose, showNotification, onUpdate }) 
                     )
                   )}
                   {test.grading_method === 'quiz' && test.quiz_questions?.length > 0 && (
-                    <span style={{ ...detailStyles.fileInfo, color: '#10b981' }}>📋 {test.quiz_questions.length} quiz-питань</span>
+                    <span style={{ ...detailStyles.fileInfo, color: '#10b981' }}>
+                      📋 {test.quiz_questions.length} quiz-питань
+                      {test.quiz_question_count && test.quiz_question_count < test.quiz_questions.length
+                        ? ` (студент отримує ${test.quiz_question_count} випадкових)`
+                        : ''}
+                    </span>
                   )}
                 </div>
 
@@ -960,8 +965,8 @@ function DisciplineDetails({ discipline, onClose, showNotification, onUpdate }) 
                 
                 {/* Кнопка завантаження результатів */}
                 {(test.graded_count || 0) > 0 && (
-                  <div style={{ marginTop: '15px', display: 'flex', gap: '10px' }}>
-                    <button 
+                  <div style={{ marginTop: '15px', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                    <button
                       onClick={async () => {
                         try {
                           const response = await fetch(`${API_URL}/submissions/test/${test.id}/results`, {
@@ -986,6 +991,33 @@ function DisciplineDetails({ discipline, onClose, showNotification, onUpdate }) 
                     >
                       📥 Завантажити результати ({test.graded_count} оцінено)
                     </button>
+                    {test.grading_method === 'quiz' && (
+                      <button
+                        onClick={async () => {
+                          try {
+                            const response = await fetch(`${API_URL}/tests/${test.id}/quiz-report`, {
+                              headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+                            });
+                            if (!response.ok) {
+                              const err = await response.json();
+                              throw new Error(err.error || 'Помилка завантаження');
+                            }
+                            const blob = await response.blob();
+                            const url = window.URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = `Quiz_${test.title}_${new Date().toISOString().split('T')[0]}.xlsx`;
+                            a.click();
+                            window.URL.revokeObjectURL(url);
+                          } catch (err) {
+                            showNotification(err.message, 'error');
+                          }
+                        }}
+                        style={{ ...detailStyles.fileBtn, background: 'rgba(59, 130, 246, 0.2)', borderColor: '#3b82f6', color: '#3b82f6' }}
+                      >
+                        📋 Детальний Quiz звіт (відповіді + пояснення)
+                      </button>
+                    )}
                   </div>
                 )}
                 
@@ -1419,7 +1451,9 @@ function AddTestModal({ disciplineId, onClose, onAdd }) {
                   style={{ ...styles.input, width: '200px', marginTop: '4px' }}
                 />
                 <p style={addTestStyles.hint}>
-                  {quizQuestionCount && parseInt(quizQuestionCount) > 0 && parseInt(quizQuestionCount) < quizParsedCount
+                  {quizQuestionCount && parseInt(quizQuestionCount) > 0 && parseInt(quizQuestionCount) > quizParsedCount
+                    ? `Увага: вказано ${quizQuestionCount}, але у файлі лише ${quizParsedCount} питань. Буде обмежено до ${quizParsedCount}.`
+                    : quizQuestionCount && parseInt(quizQuestionCount) > 0 && parseInt(quizQuestionCount) < quizParsedCount
                     ? `Кожен студент отримає ${quizQuestionCount} випадкових питань з ${quizParsedCount}`
                     : 'Залиште порожнім — кожен студент отримає усі питання'}
                 </p>

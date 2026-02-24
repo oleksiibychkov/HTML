@@ -302,10 +302,18 @@ router.post('/', authMiddleware, teacherOnly, uploadFields, async (req, res) => 
                         quizQuestionsCount++;
                     }
 
+                    // Обмежуємо quiz_question_count до реальної кількості розпарсених питань
+                    let actualQuizCount = parsedQuizCount;
+                    if (parsedQuizCount && parsedQuizCount > parsedQuestions.length) {
+                        actualQuizCount = parsedQuestions.length;
+                        execute(`UPDATE tests SET quiz_question_count = @cnt WHERE id = @id`, { cnt: actualQuizCount, id: testId });
+                        console.log(`⚠️ quiz_question_count ${parsedQuizCount} > розпарсено ${parsedQuestions.length}, обмежено до ${actualQuizCount}`);
+                    }
+
                     // Оновлюємо max_points
-                    const pointsPerQuestion = parsedQuestions.length > 0 ? (parsedQuestions[0].points || 1) : 1;
-                    const effectiveCount = (parsedQuizCount && parsedQuizCount > 0 && parsedQuizCount < parsedQuestions.length)
-                        ? parsedQuizCount
+                    const pointsPerQuestion = parsedQuestions[0].points || 1;
+                    const effectiveCount = (actualQuizCount && actualQuizCount > 0 && actualQuizCount < parsedQuestions.length)
+                        ? actualQuizCount
                         : parsedQuestions.length;
                     const quizTotalPoints = effectiveCount * pointsPerQuestion;
                     execute(`UPDATE tests SET max_points = @pts WHERE id = @id`, { pts: quizTotalPoints, id: testId });
@@ -332,7 +340,8 @@ router.post('/', authMiddleware, teacherOnly, uploadFields, async (req, res) => 
                 math_tasks_count: mathTasksCount,
                 quiz_questions_count: quizQuestionsCount,
                 quiz_questions_total: quizQuestionsCount,
-                quiz_question_count: parsedQuizCount > 0 ? parsedQuizCount : null
+                quiz_question_count: parsedQuizCount > 0 ? Math.min(parsedQuizCount, quizQuestionsCount || parsedQuizCount) : null,
+                quiz_count_adjusted: parsedQuizCount > 0 && quizQuestionsCount > 0 && parsedQuizCount > quizQuestionsCount
             }
         });
         
@@ -437,38 +446,40 @@ router.get('/:id/quiz-questions', authMiddleware, (req, res) => {
         let maxPoints = test.max_points;
         const quizQuestionCount = test.quiz_question_count;
 
-        // Якщо задано кількість питань і вона менша за загальну — випадковий вибір
-        if (quizQuestionCount && quizQuestionCount > 0 && quizQuestionCount < allQuestions.length) {
-            // Перевіряємо чи вже є збережений набір для цього студента
-            const existingSet = queryOne(`
-                SELECT question_ids_json FROM quiz_student_sets
-                WHERE test_id = @testId AND student_id = @studentId
-            `, { testId, studentId });
+        // Якщо задано кількість питань — випадковий вибір (або всі, якщо count >= total)
+        if (quizQuestionCount && quizQuestionCount > 0) {
+            // Обмежуємо кількість доступними питаннями
+            const effectiveCount = Math.min(quizQuestionCount, allQuestions.length);
 
-            let selectedIds;
+            if (effectiveCount < allQuestions.length) {
+                // Потрібна випадкова підмножина
+                const existingSet = queryOne(`
+                    SELECT question_ids_json FROM quiz_student_sets
+                    WHERE test_id = @testId AND student_id = @studentId
+                `, { testId, studentId });
 
-            if (existingSet) {
-                // Використовуємо збережений набір
-                selectedIds = JSON.parse(existingSet.question_ids_json);
-            } else {
-                // Випадково обираємо N питань
-                const shuffled = [...allQuestions].sort(() => Math.random() - 0.5);
-                selectedIds = shuffled.slice(0, quizQuestionCount).map(q => q.id);
+                let selectedIds;
 
-                // Зберігаємо набір
-                execute(`
-                    INSERT INTO quiz_student_sets (test_id, student_id, question_ids_json)
-                    VALUES (@testId, @studentId, @questionIds)
-                `, {
-                    testId,
-                    studentId,
-                    questionIds: JSON.stringify(selectedIds)
-                });
+                if (existingSet) {
+                    selectedIds = JSON.parse(existingSet.question_ids_json);
+                } else {
+                    const shuffled = [...allQuestions].sort(() => Math.random() - 0.5);
+                    selectedIds = shuffled.slice(0, effectiveCount).map(q => q.id);
+
+                    execute(`
+                        INSERT INTO quiz_student_sets (test_id, student_id, question_ids_json)
+                        VALUES (@testId, @studentId, @questionIds)
+                    `, {
+                        testId,
+                        studentId,
+                        questionIds: JSON.stringify(selectedIds)
+                    });
+                }
+
+                const idSet = new Set(selectedIds);
+                questions = allQuestions.filter(q => idSet.has(q.id));
             }
-
-            // Фільтруємо питання за обраними ID і зберігаємо порядок sort_order
-            const idSet = new Set(selectedIds);
-            questions = allQuestions.filter(q => idSet.has(q.id));
+            // else: effectiveCount >= total — використовуємо всі питання (questions = allQuestions)
 
             // Оновлюємо max_points для підмножини
             const pointsPerQuestion = questions.length > 0 ? questions[0].points : 1;
@@ -1068,46 +1079,123 @@ ${criteria.map(c => `- ${c.name}: максимум ${c.maxPoints} балів`).j
         if (!fs.existsSync(resultsDir)) {
             fs.mkdirSync(resultsDir, { recursive: true });
         }
-        
+
         const wb = XLSX.utils.book_new();
         const excelData = [];
-        
-        // Заголовки
-        const mathHeaders = mathTasks.map(t => `Завд.${t.task_number} (${t.points} б.)`);
-        const quizHeaders = quizQuestions.map(q => `Тест ${q.question_number}`);
-        const criteriaHeaders = criteria.map(c => c.name);
-        excelData.push(['№', 'Студент', 'Група', ...mathHeaders, ...quizHeaders, ...criteriaHeaders, 'Загальна сума', 'Відгук']);
 
-        // Дані
-        results.forEach((r, index) => {
-            const mathCols = mathTasks.map(t => {
-                const taskResult = r.mathResult?.tasks?.find(tr => tr.num === t.task_number);
-                return taskResult ? (taskResult.correct ? t.points : 0) : '';
+        if (gradingMethod === 'quiz') {
+            // ========== Детальний Excel для Quiz ==========
+            // Заголовки: №, Студент, Група, [для кожного питання: відповідь + бали], Бонус за пояснення, Загальна сума
+            const qHeaders = [];
+            quizQuestions.forEach(q => {
+                qHeaders.push(`${q.question_number} відп.`);
+                qHeaders.push(`${q.question_number} бали`);
             });
-            const quizCols = quizQuestions.map(q => {
-                const grade = r.grades?.find(g => g.criterion === `Тест ${q.question_number}`);
-                return grade ? grade.points : '';
+            excelData.push(['№', 'Студент', 'Група', ...qHeaders, 'Бонус пояснення', 'Загальна сума', 'Відгук']);
+
+            // Дані — для кожного студента запитуємо quiz_answers
+            results.forEach((r, index) => {
+                const sub = submissions.find(s => s.student_name === r.student);
+                const quizAnswersData = sub ? queryAll(`
+                    SELECT qa.*, qq.question_number
+                    FROM quiz_answers qa
+                    JOIN quiz_questions qq ON qa.quiz_question_id = qq.id
+                    WHERE qa.submission_id = @subId
+                    ORDER BY qq.sort_order
+                `, { subId: sub.id }) : [];
+
+                const answerMap = {};
+                let explBonus = 0;
+                for (const a of quizAnswersData) {
+                    answerMap[a.question_number] = a;
+                    explBonus += (a.explanation_score || 0);
+                }
+
+                const qCols = [];
+                quizQuestions.forEach(q => {
+                    const ans = answerMap[q.question_number];
+                    qCols.push(ans ? ans.student_answer : '—');
+                    qCols.push(ans ? (ans.points_earned || 0) : 0);
+                });
+
+                excelData.push([
+                    index + 1,
+                    r.student,
+                    r.group || '',
+                    ...qCols,
+                    explBonus,
+                    r.total,
+                    r.feedback?.substring(0, 500) || ''
+                ]);
             });
-            const critCols = criteria.map(c => {
-                const grade = r.grades?.find(g =>
-                    g.criterion?.toLowerCase().includes(c.name.toLowerCase().substring(0, 15))
-                );
-                return grade?.points ?? '';
+
+            const ws = XLSX.utils.aoa_to_sheet(excelData);
+            XLSX.utils.book_append_sheet(wb, ws, 'Результати');
+
+            // Другий лист — детальні пояснення студентів
+            const explData = [['Студент', 'Тест', 'Питання', 'Відповідь', 'Правильна', 'Бали', 'Пояснення студента', 'Оцінка пояснення']];
+            for (const sub of submissions) {
+                const r = results.find(res => res.student === sub.student_name);
+                if (!r) continue;
+                const quizAnswersData = queryAll(`
+                    SELECT qa.*, qq.question_number, qq.question_text, qq.correct_answer, qq.points as max_points
+                    FROM quiz_answers qa
+                    JOIN quiz_questions qq ON qa.quiz_question_id = qq.id
+                    WHERE qa.submission_id = @subId
+                    ORDER BY qq.sort_order
+                `, { subId: sub.id });
+
+                for (const a of quizAnswersData) {
+                    explData.push([
+                        sub.student_name,
+                        `Тест ${a.question_number}`,
+                        (a.question_text || '').substring(0, 200),
+                        a.student_answer || '—',
+                        a.correct_answer || '?',
+                        `${a.points_earned || 0}/${a.max_points || 1}`,
+                        a.student_explanation || '',
+                        a.explanation_score != null ? `${a.explanation_score}/2` : ''
+                    ]);
+                }
+            }
+            const wsExpl = XLSX.utils.aoa_to_sheet(explData);
+            wsExpl['!cols'] = [
+                { width: 20 }, { width: 10 }, { width: 50 }, { width: 8 },
+                { width: 8 }, { width: 8 }, { width: 60 }, { width: 12 }
+            ];
+            XLSX.utils.book_append_sheet(wb, wsExpl, 'Пояснення');
+
+        } else {
+            // ========== Стандартний Excel для AI/Math/Mixed ==========
+            const mathHeaders = mathTasks.map(t => `Завд.${t.task_number} (${t.points} б.)`);
+            const criteriaHeaders = criteria.map(c => c.name);
+            excelData.push(['№', 'Студент', 'Група', ...mathHeaders, ...criteriaHeaders, 'Загальна сума', 'Відгук']);
+
+            results.forEach((r, index) => {
+                const mathCols = mathTasks.map(t => {
+                    const taskResult = r.mathResult?.tasks?.find(tr => tr.num === t.task_number);
+                    return taskResult ? (taskResult.correct ? t.points : 0) : '';
+                });
+                const critCols = criteria.map(c => {
+                    const grade = r.grades?.find(g =>
+                        g.criterion?.toLowerCase().includes(c.name.toLowerCase().substring(0, 15))
+                    );
+                    return grade?.points ?? '';
+                });
+                excelData.push([
+                    index + 1,
+                    r.student,
+                    r.group || '',
+                    ...mathCols,
+                    ...critCols,
+                    r.total,
+                    r.feedback?.substring(0, 500) || ''
+                ]);
             });
-            excelData.push([
-                index + 1,
-                r.student,
-                r.group || '',
-                ...mathCols,
-                ...quizCols,
-                ...critCols,
-                r.total,
-                r.feedback?.substring(0, 500) || ''
-            ]);
-        });
-        
-        const ws = XLSX.utils.aoa_to_sheet(excelData);
-        XLSX.utils.book_append_sheet(wb, ws, 'Результати');
+
+            const ws = XLSX.utils.aoa_to_sheet(excelData);
+            XLSX.utils.book_append_sheet(wb, ws, 'Результати');
+        }
         
         const resultFileName = `results_test_${testId}_${Date.now()}.xlsx`;
         const resultPath = path.join(resultsDir, resultFileName);
@@ -1158,6 +1246,160 @@ router.get('/:id/results/:filename', authMiddleware, teacherOnly, (req, res) => 
         
     } catch (err) {
         console.error('Помилка завантаження:', err);
+        res.status(500).json({ error: 'Помилка сервера' });
+    }
+});
+
+// ============================================
+// ЗАВАНТАЖИТИ ДЕТАЛЬНИЙ QUIZ ЗВІТ (Excel)
+// ============================================
+router.get('/:id/quiz-report', authMiddleware, teacherOnly, (req, res) => {
+    try {
+        const testId = parseInt(req.params.id);
+
+        const test = queryOne(`
+            SELECT t.*, d.teacher_id, d.name as discipline_name
+            FROM tests t
+            JOIN disciplines d ON t.discipline_id = d.id
+            WHERE t.id = @id
+        `, { id: testId });
+
+        if (!test || test.teacher_id !== req.user.id) {
+            return res.status(404).json({ error: 'Тест не знайдено' });
+        }
+
+        if (test.grading_method !== 'quiz') {
+            return res.status(400).json({ error: 'Цей тест не є quiz-тестом' });
+        }
+
+        // Всі quiz-питання
+        const quizQuestions = queryAll(`
+            SELECT * FROM quiz_questions WHERE test_id = @testId ORDER BY sort_order
+        `, { testId });
+
+        // Всі здані submission-и (graded і pending)
+        const submissions = queryAll(`
+            SELECT s.*, u.name as student_name, u.student_group
+            FROM submissions s
+            JOIN users u ON s.student_id = u.id
+            WHERE s.test_id = @testId
+            ORDER BY u.name
+        `, { testId });
+
+        if (submissions.length === 0) {
+            return res.status(404).json({ error: 'Немає здач для цього тесту' });
+        }
+
+        const wb = XLSX.utils.book_new();
+
+        // ===== Лист 1: Зведена таблиця =====
+        const qHeaders = [];
+        quizQuestions.forEach(q => {
+            qHeaders.push(`${q.question_number}`);
+        });
+        const summaryData = [['№', 'Студент', 'Група', ...qHeaders, 'Бали за відповіді', 'Бонус пояснення', 'Всього', 'Статус']];
+
+        for (let i = 0; i < submissions.length; i++) {
+            const sub = submissions[i];
+            const answers = queryAll(`
+                SELECT qa.*, qq.question_number
+                FROM quiz_answers qa
+                JOIN quiz_questions qq ON qa.quiz_question_id = qq.id
+                WHERE qa.submission_id = @subId
+                ORDER BY qq.sort_order
+            `, { subId: sub.id });
+
+            const ansMap = {};
+            let answerPoints = 0;
+            let explBonus = 0;
+            for (const a of answers) {
+                ansMap[a.question_number] = a;
+                answerPoints += (a.points_earned || 0);
+                explBonus += (a.explanation_score || 0);
+            }
+
+            const qCols = quizQuestions.map(q => {
+                const a = ansMap[q.question_number];
+                if (!a) return '—';
+                return `${a.student_answer || '—'}${a.is_correct ? '✓' : '✗'}`;
+            });
+
+            summaryData.push([
+                i + 1,
+                sub.student_name,
+                sub.student_group || '',
+                ...qCols,
+                answerPoints,
+                explBonus,
+                sub.total_grade || 0,
+                sub.status === 'graded' ? 'Оцінено' : sub.status === 'pending' ? 'Очікує' : sub.status
+            ]);
+        }
+
+        const wsSummary = XLSX.utils.aoa_to_sheet(summaryData);
+        XLSX.utils.book_append_sheet(wb, wsSummary, 'Зведена');
+
+        // ===== Лист 2: Правильні відповіді =====
+        const correctData = [['Тест', 'Питання', 'A)', 'B)', 'C)', 'D)', 'Правильна', 'Бали']];
+        for (const q of quizQuestions) {
+            correctData.push([
+                q.question_number,
+                (q.question_text || '').substring(0, 150),
+                q.option_a || '',
+                q.option_b || '',
+                q.option_c || '',
+                q.option_d || '',
+                q.correct_answer || '?',
+                q.points
+            ]);
+        }
+        const wsCorrect = XLSX.utils.aoa_to_sheet(correctData);
+        wsCorrect['!cols'] = [
+            { width: 8 }, { width: 50 }, { width: 30 }, { width: 30 },
+            { width: 30 }, { width: 30 }, { width: 10 }, { width: 6 }
+        ];
+        XLSX.utils.book_append_sheet(wb, wsCorrect, 'Питання');
+
+        // ===== Лист 3: Пояснення студентів =====
+        const explData = [['Студент', 'Група', 'Тест', 'Відповідь', 'Правильна', 'Бали', 'Пояснення', 'Оцінка пояснення']];
+        for (const sub of submissions) {
+            const answers = queryAll(`
+                SELECT qa.*, qq.question_number, qq.correct_answer, qq.points as max_pts
+                FROM quiz_answers qa
+                JOIN quiz_questions qq ON qa.quiz_question_id = qq.id
+                WHERE qa.submission_id = @subId AND qa.student_explanation IS NOT NULL AND qa.student_explanation != ''
+                ORDER BY qq.sort_order
+            `, { subId: sub.id });
+
+            for (const a of answers) {
+                explData.push([
+                    sub.student_name,
+                    sub.student_group || '',
+                    a.question_number,
+                    a.student_answer || '—',
+                    a.correct_answer || '?',
+                    `${a.points_earned || 0}/${a.max_pts || 1}`,
+                    a.student_explanation,
+                    a.explanation_score != null ? `${a.explanation_score}/2` : ''
+                ]);
+            }
+        }
+        const wsExpl = XLSX.utils.aoa_to_sheet(explData);
+        wsExpl['!cols'] = [
+            { width: 20 }, { width: 10 }, { width: 8 }, { width: 8 },
+            { width: 8 }, { width: 8 }, { width: 60 }, { width: 12 }
+        ];
+        XLSX.utils.book_append_sheet(wb, wsExpl, 'Пояснення');
+
+        // Відправляємо файл
+        const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+        const filename = `Quiz_${test.title}_${new Date().toISOString().split('T')[0]}.xlsx`;
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+        res.send(buffer);
+
+    } catch (err) {
+        console.error('Помилка quiz-звіту:', err);
         res.status(500).json({ error: 'Помилка сервера' });
     }
 });
