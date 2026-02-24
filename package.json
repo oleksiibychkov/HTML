@@ -4,7 +4,7 @@
   "description": "Система автоматизованого тестування з AI-перевіркою",
   "main": "src/server.js",
   "scripts": {
-    "build": "cd client && npm install && npm run build",
+    "build": "cd client && npm install --include=dev && npm run build",
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "init-db": "node src/database/init.js",

@@ -2812,6 +2812,7 @@ function TemplatesView({ showNotification }) {
   if (loading) return <div style={styles.loadingText}>Завантаження...</div>;
 
   const categories = [
+    { key: 'guides', title: '📖 Інструкції', desc: 'Детальні гайди для викладачів та студентів' },
     { key: 'math', title: '🔢 Математичні завдання', desc: 'Шаблони для створення тестів з еталонними формулами' },
     { key: 'criteria', title: '📊 Критерії оцінювання', desc: 'Шаблони для різних типів дисциплін' },
     { key: 'student', title: '📝 Для студентів', desc: 'Зразки оформлення відповідей' }
