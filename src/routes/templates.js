@@ -118,4 +118,34 @@ router.get('/:filename', authMiddleware, (req, res) => {
     }
 });
 
+// ============================================
+// ІНСТРУКЦІЇ (docs)
+// ============================================
+const DOCS_DIR = path.resolve(__dirname, '../../docs');
+
+const AVAILABLE_DOCS = {
+    'student': { file: 'STUDENT_GUIDE.md', title: 'Інструкція для студентів' },
+    'teacher': { file: 'TEMPLATE_GUIDE.md', title: 'Інструкція для викладачів' }
+};
+
+router.get('/docs/:key', authMiddleware, (req, res) => {
+    try {
+        const doc = AVAILABLE_DOCS[req.params.key];
+        if (!doc) {
+            return res.status(404).json({ error: 'Документ не знайдено' });
+        }
+
+        const filePath = path.join(DOCS_DIR, doc.file);
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ error: 'Файл не знайдено' });
+        }
+
+        const content = fs.readFileSync(filePath, 'utf8');
+        res.json({ title: doc.title, content });
+    } catch (err) {
+        console.error('Помилка читання документа:', err);
+        res.status(500).json({ error: 'Помилка сервера' });
+    }
+});
+
 module.exports = router;

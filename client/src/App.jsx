@@ -2750,6 +2750,9 @@ function StudentTemplatesSection({ showNotification }) {
 function TemplatesView({ showNotification }) {
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [openGuide, setOpenGuide] = useState(null); // 'student' | 'teacher' | null
+  const [guideContent, setGuideContent] = useState({});
+  const [guideLoading, setGuideLoading] = useState(false);
 
   useEffect(() => {
     loadTemplates();
@@ -2784,6 +2787,26 @@ function TemplatesView({ showNotification }) {
     } catch (err) {
       showNotification(err.message, 'error');
     }
+  };
+
+  const toggleGuide = async (key) => {
+    if (openGuide === key) {
+      setOpenGuide(null);
+      return;
+    }
+    if (!guideContent[key]) {
+      setGuideLoading(true);
+      try {
+        const data = await api(`/templates/docs/${key}`);
+        setGuideContent(prev => ({ ...prev, [key]: data.content }));
+      } catch (err) {
+        showNotification('Помилка завантаження інструкції', 'error');
+        setGuideLoading(false);
+        return;
+      }
+      setGuideLoading(false);
+    }
+    setOpenGuide(key);
   };
 
   if (loading) return <div style={styles.loadingText}>Завантаження...</div>;
@@ -2866,6 +2889,70 @@ function TemplatesView({ showNotification }) {
           </div>
         </div>
       </div>
+
+      {/* Інструкції */}
+      <h3 style={{ ...styles.sectionTitle, marginTop: '32px', marginBottom: '16px' }}>📖 Інструкції</h3>
+
+      {[
+        { key: 'teacher', icon: '🎓', title: 'Інструкція для викладачів', desc: 'Як створювати Excel-шаблони критеріїв оцінювання' },
+        { key: 'student', icon: '📚', title: 'Інструкція для студентів', desc: 'Як оформлювати роботи у Markdown, формули LaTeX, конвертація в PDF' }
+      ].map(guide => (
+        <div key={guide.key} style={{ marginBottom: '12px' }}>
+          <div
+            onClick={() => toggleGuide(guide.key)}
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              padding: '18px 24px',
+              background: 'linear-gradient(145deg, #1e293b, #0f172a)',
+              borderRadius: openGuide === guide.key ? '16px 16px 0 0' : '16px',
+              border: '1px solid #334155',
+              cursor: 'pointer',
+              transition: 'all 0.2s'
+            }}
+          >
+            <div>
+              <div style={{ fontSize: '16px', fontWeight: '600', color: '#f1f5f9', marginBottom: '4px' }}>
+                {guide.icon} {guide.title}
+              </div>
+              <div style={{ fontSize: '13px', color: '#94a3b8' }}>{guide.desc}</div>
+            </div>
+            <span style={{ fontSize: '20px', color: '#64748b', transition: 'transform 0.2s', transform: openGuide === guide.key ? 'rotate(180deg)' : 'none' }}>
+              ▼
+            </span>
+          </div>
+          {openGuide === guide.key && (
+            <div style={{
+              padding: '24px',
+              background: 'rgba(15, 23, 42, 0.8)',
+              border: '1px solid #334155',
+              borderTop: 'none',
+              borderRadius: '0 0 16px 16px',
+              maxHeight: '70vh',
+              overflow: 'auto'
+            }}>
+              {guideLoading ? (
+                <div style={{ color: '#64748b', textAlign: 'center', padding: '20px' }}>Завантаження...</div>
+              ) : guideContent[guide.key] ? (
+                <pre style={{
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  fontFamily: "'Source Sans Pro', sans-serif",
+                  fontSize: '14px',
+                  lineHeight: '1.7',
+                  color: '#cbd5e1',
+                  margin: 0
+                }}>
+                  {guideContent[guide.key]}
+                </pre>
+              ) : (
+                <div style={{ color: '#64748b', textAlign: 'center' }}>Не вдалося завантажити</div>
+              )}
+            </div>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
