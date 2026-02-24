@@ -646,7 +646,10 @@ router.get('/', authMiddleware, (req, res) => {
                        t.max_points,
                        t.criteria_json,
                        t.grading_method,
-                       d.name as discipline_name
+                       d.name as discipline_name,
+                       (SELECT COUNT(*) FROM resubmit_requests rr
+                        WHERE rr.test_id = t.id AND rr.student_id = s.student_id AND rr.status = 'pending'
+                       ) as has_pending_resubmit
                 FROM submissions s
                 JOIN users u ON s.student_id = u.id
                 JOIN tests t ON s.test_id = t.id

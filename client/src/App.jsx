@@ -491,10 +491,10 @@ function TeacherDashboard({ showNotification }) {
   };
 
   const handleAllowResubmit = async (submissionId) => {
-    if (!confirm('Дозволити студенту здати роботу повторно?')) return;
+    if (!confirm('Направити студента на перездачу? Його поточна робота буде видалена і він зможе здати заново.')) return;
     try {
       await api(`/submissions/${submissionId}/allow-resubmit`, { method: 'POST' });
-      showNotification('Перездачу дозволено', 'success');
+      showNotification('Студента направлено на перездачу', 'success');
       loadData();
     } catch (err) {
       showNotification(err.message, 'error');
@@ -674,11 +674,13 @@ function TeacherDashboard({ showNotification }) {
       )}
 
       {activeTab === 'submissions' && (
-        <SubmissionsList 
+        <SubmissionsList
           submissions={submissions}
           showNotification={showNotification}
           onUpdate={loadData}
           onAllowResubmit={handleAllowResubmit}
+          resubmitRequests={resubmitRequests}
+          onApproveResubmit={handleApproveResubmit}
         />
       )}
 
@@ -1599,7 +1601,7 @@ function AddTestModal({ disciplineId, onClose, onAdd }) {
 // ============================================
 // SUBMISSIONS LIST
 // ============================================
-function SubmissionsList({ submissions, showNotification, onUpdate, onAllowResubmit }) {
+function SubmissionsList({ submissions, showNotification, onUpdate, onAllowResubmit, resubmitRequests, onApproveResubmit }) {
   const [grading, setGrading] = useState(null);
   const [expandedSub, setExpandedSub] = useState(null);
   const [quizDetails, setQuizDetails] = useState(null);
@@ -1696,24 +1698,51 @@ function SubmissionsList({ submissions, showNotification, onUpdate, onAllowResub
                   {grading === sub.id ? '🔄 BI оцінює...' : '🤖 Оцінити з BI'}
                 </button>
               )}
-              {/* Кнопка дозволу перездачі */}
+              {/* Кнопка "Направити на перездачу" — викладач ініціює */}
               {onAllowResubmit && (
                 <button
                   onClick={() => onAllowResubmit(sub.id)}
                   style={{
                     marginLeft: '10px',
                     padding: '8px 16px',
-                    background: 'rgba(245, 158, 11, 0.2)',
-                    border: '1px solid #f59e0b',
+                    background: 'rgba(239, 68, 68, 0.15)',
+                    border: '1px solid #ef4444',
                     borderRadius: '8px',
-                    color: '#f59e0b',
+                    color: '#ef4444',
                     cursor: 'pointer',
-                    fontSize: '14px'
+                    fontSize: '14px',
+                    fontFamily: 'inherit'
                   }}
                 >
-                  🔄 Дозволити перездачу
+                  ↩️ Направити на перездачу
                 </button>
               )}
+              {/* Кнопка "Дозволити перездачу" — тільки якщо є запит від студента */}
+              {(() => {
+                const pendingReq = (resubmitRequests || []).find(
+                  r => r.status === 'pending' && r.test_id === sub.test_id && r.student_id === sub.student_id
+                );
+                const hasPending = sub.has_pending_resubmit > 0 || pendingReq;
+                return hasPending && pendingReq && onApproveResubmit ? (
+                  <button
+                    onClick={() => onApproveResubmit(pendingReq.id)}
+                    style={{
+                      marginLeft: '10px',
+                      padding: '8px 16px',
+                      background: 'rgba(245, 158, 11, 0.2)',
+                      border: '1px solid #f59e0b',
+                      borderRadius: '8px',
+                      color: '#f59e0b',
+                      cursor: 'pointer',
+                      fontSize: '14px',
+                      fontFamily: 'inherit',
+                      animation: 'pulse 2s infinite'
+                    }}
+                  >
+                    ✅ Дозволити перездачу (запит від студента)
+                  </button>
+                ) : null;
+              })()}
               {/* Кнопка деталей quiz */}
               {sub.grading_method === 'quiz' && sub.status === 'graded' && (
                 <button
