@@ -598,6 +598,12 @@ function TeacherDashboard({ showNotification }) {
             </span>
           )}
         </button>
+        <button 
+          onClick={() => setActiveTab('templates')}
+          style={activeTab === 'templates' ? styles.tabActive : styles.tab}
+        >
+          📋 Шаблони
+        </button>
       </div>
 
       {activeTab === 'requests' && (
@@ -679,6 +685,10 @@ function TeacherDashboard({ showNotification }) {
           onUpdate={loadData}
           onAllowResubmit={handleAllowResubmit}
         />
+      )}
+
+      {activeTab === 'templates' && (
+        <TemplatesView showNotification={showNotification} />
       )}
 
       {showAddDiscipline && (
@@ -818,6 +828,19 @@ function DisciplineDetails({ discipline, onClose, showNotification, onUpdate }) 
                 <div style={detailStyles.testHeader}>
                   <div>
                     <span style={styles.testType}>{testTypeLabels[test.type]}</span>
+                    {test.grading_method && test.grading_method !== 'ai' && (
+                      <span style={{
+                        marginLeft: '8px',
+                        padding: '2px 8px',
+                        borderRadius: '6px',
+                        fontSize: '11px',
+                        fontWeight: '600',
+                        background: test.grading_method === 'math' ? 'rgba(139, 92, 246, 0.2)' : test.grading_method === 'quiz' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(245, 158, 11, 0.2)',
+                        color: test.grading_method === 'math' ? '#a78bfa' : test.grading_method === 'quiz' ? '#10b981' : '#f59e0b'
+                      }}>
+                        {test.grading_method === 'math' ? '🔢 Формули' : test.grading_method === 'quiz' ? '📋 Quiz' : '🔀 Гібрид'}
+                      </span>
+                    )}
                     <span style={{ marginLeft: '10px', color: '#e2e8f0', fontWeight: '600' }}>{test.title}</span>
                   </div>
                   <div style={{ fontSize: '12px', color: '#64748b' }}>
@@ -830,6 +853,12 @@ function DisciplineDetails({ discipline, onClose, showNotification, onUpdate }) 
                     <span style={detailStyles.infoLabel}>Критеріїв:</span>
                     <span>{test.criteria?.length || 0}</span>
                   </div>
+                  {test.math_tasks?.length > 0 && (
+                    <div style={detailStyles.infoItem}>
+                      <span style={detailStyles.infoLabel}>🔢 Мат. завдань:</span>
+                      <span style={{ color: '#a78bfa' }}>{test.math_tasks.length}</span>
+                    </div>
+                  )}
                   <div style={detailStyles.infoItem}>
                     <span style={detailStyles.infoLabel}>Макс. балів:</span>
                     <span>{test.max_points}</span>
@@ -1121,24 +1150,49 @@ function AddTestModal({ disciplineId, onClose, onAdd }) {
     title: '',
     description: '',
     start_time: '',
-    end_time: ''
+    end_time: '',
+    grading_method: 'ai'
   });
   const [taskFile, setTaskFile] = useState(null);
   const [criteriaFile, setCriteriaFile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState('file'); // 'file' або 'manual'
   const [manualCriteria, setManualCriteria] = useState([{ name: '', max_points: 0 }]);
-  
+  const [mathTasks, setMathTasks] = useState([{ task_number: 1, description: '', reference_answer: '', points: 10 }]);
+  const [quizParsedCount, setQuizParsedCount] = useState(0);
+  const [quizQuestionCount, setQuizQuestionCount] = useState('');
+
   // Refs для file inputs
   const taskFileRef = React.useRef(null);
   const criteriaFileRef = React.useRef(null);
 
   const handleTaskFileChange = (e) => {
     const file = e.target.files[0];
-    if (file && file.type === 'application/pdf') {
-      setTaskFile(file);
-    } else if (file) {
-      alert('Завантажте PDF файл');
+    if (!file) return;
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (testData.grading_method === 'quiz') {
+      if (ext === 'md') {
+        setTaskFile(file);
+        // Парсимо .md клієнтськи щоб показати кількість питань
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          const text = ev.target.result;
+          // Простий підрахунок питань за патерном **Тест N.M.**
+          const matches = text.match(/\*{2}Тест\s+\d+\.\d+\.?\*{2}/gi);
+          const count = matches ? matches.length : 0;
+          setQuizParsedCount(count);
+          setQuizQuestionCount('');
+        };
+        reader.readAsText(file);
+      } else {
+        alert('Для Quiz завантажте .md файл');
+      }
+    } else {
+      if (file.type === 'application/pdf') {
+        setTaskFile(file);
+      } else {
+        alert('Завантажте PDF файл');
+      }
     }
   };
 
@@ -1153,7 +1207,7 @@ function AddTestModal({ disciplineId, onClose, onAdd }) {
     }
     
     setCriteriaFile(file);
-    setMode('file'); // Перемикаємо режим на file
+    setMode('file');
   };
 
   const addManualCriteria = () => {
@@ -1170,6 +1224,27 @@ function AddTestModal({ disciplineId, onClose, onAdd }) {
     setManualCriteria(newCriteria);
   };
 
+  // Math tasks handlers
+  const addMathTask = () => {
+    setMathTasks([...mathTasks, { 
+      task_number: mathTasks.length + 1, 
+      description: '', 
+      reference_answer: '', 
+      points: 10 
+    }]);
+  };
+
+  const removeMathTask = (idx) => {
+    const updated = mathTasks.filter((_, i) => i !== idx).map((t, i) => ({ ...t, task_number: i + 1 }));
+    setMathTasks(updated);
+  };
+
+  const updateMathTask = (idx, field, value) => {
+    const updated = [...mathTasks];
+    updated[idx][field] = field === 'points' ? parseInt(value) || 0 : value;
+    setMathTasks(updated);
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -1181,28 +1256,45 @@ function AddTestModal({ disciplineId, onClose, onAdd }) {
     formData.append('description', testData.description || '');
     formData.append('start_time', testData.start_time);
     formData.append('end_time', testData.end_time);
+    formData.append('grading_method', testData.grading_method);
     
     if (taskFile) {
       formData.append('task_file', taskFile);
     }
     
-    // Якщо є Excel файл - завантажуємо його
     if (criteriaFile) {
       formData.append('criteria_file', criteriaFile);
     }
     
-    // Якщо ручний режим і немає файлу - додаємо критерії як JSON
     if (mode === 'manual' && !criteriaFile) {
       formData.append('manual_criteria', JSON.stringify(manualCriteria));
+    }
+    
+    // Мат. завдання
+    if (testData.grading_method === 'math' || testData.grading_method === 'mixed') {
+      const validTasks = mathTasks.filter(t => t.description && t.reference_answer);
+      if (validTasks.length > 0) {
+        formData.append('math_tasks', JSON.stringify(validTasks));
+      }
+    }
+
+    // Кількість quiz-питань на студента
+    if (testData.grading_method === 'quiz' && quizQuestionCount) {
+      formData.append('quiz_question_count', quizQuestionCount);
     }
     
     await onAdd(disciplineId, formData);
     setLoading(false);
   };
 
+  const gradingMethod = testData.grading_method;
+  const showCriteria = gradingMethod === 'ai' || gradingMethod === 'mixed';
+  const showMathTasks = gradingMethod === 'math' || gradingMethod === 'mixed';
+  const showQuizUpload = gradingMethod === 'quiz';
+
   return (
     <div style={styles.modalOverlay} onClick={onClose}>
-      <div style={{ ...styles.modal, maxWidth: '650px' }} onClick={e => e.stopPropagation()}>
+      <div style={{ ...styles.modal, maxWidth: '700px' }} onClick={e => e.stopPropagation()}>
         <h3 style={styles.modalTitle}>Створити тест</h3>
         <form onSubmit={handleSubmit}>
           <div style={styles.inputGroup}>
@@ -1253,103 +1345,205 @@ function AddTestModal({ disciplineId, onClose, onAdd }) {
             </div>
           </div>
 
-          {/* PDF завдання */}
+          {/* Метод оцінювання */}
           <div style={styles.inputGroup}>
-            <label style={styles.label}>📄 PDF із завданням (опційно)</label>
+            <label style={styles.label}>🎯 Метод оцінювання</label>
+            <div style={addTestStyles.modeSelector}>
+              {[
+                { value: 'ai', label: '🤖 AI перевірка', desc: 'Claude оцінює за критеріями' },
+                { value: 'math', label: '🔢 Формули', desc: 'Числова перевірка відповідей' },
+                { value: 'mixed', label: '🔀 Гібрид', desc: 'Формули + AI за критеріями' },
+                { value: 'quiz', label: '📋 Quiz', desc: 'Тестові завдання A/B/C/D' }
+              ].map(m => (
+                <button
+                  key={m.value}
+                  type="button"
+                  onClick={() => setTestData({ ...testData, grading_method: m.value })}
+                  style={gradingMethod === m.value ? addTestStyles.modeActive : addTestStyles.modeBtn}
+                  title={m.desc}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+            <p style={addTestStyles.hint}>
+              {gradingMethod === 'ai' && 'AI оцінює роботу за заданими критеріями'}
+              {gradingMethod === 'math' && 'Формули перевіряються числово — без витрат на API'}
+              {gradingMethod === 'mixed' && 'Формули перевіряються автоматично, решту оцінює AI'}
+              {gradingMethod === 'quiz' && 'Завантажте .md файл з тестовими питаннями A/B/C/D. Студенти відповідатимуть у браузері.'}
+            </p>
+          </div>
+
+          {/* Файл завдання */}
+          <div style={styles.inputGroup}>
+            <label style={styles.label}>
+              {showQuizUpload ? '📋 Markdown з тестовими питаннями' : '📄 PDF із завданням (опційно)'}
+            </label>
             <div style={addTestStyles.fileUpload}>
               <input
                 type="file"
-                accept=".pdf"
+                accept={showQuizUpload ? '.md' : '.pdf'}
                 onChange={handleTaskFileChange}
                 ref={taskFileRef}
                 style={{ display: 'none' }}
               />
-              <div 
+              <div
                 onClick={() => taskFileRef.current?.click()}
                 style={addTestStyles.fileLabel}
               >
-                {taskFile ? `✅ ${taskFile.name}` : '📤 Натисніть для вибору PDF'}
+                {taskFile ? `✅ ${taskFile.name}` : (showQuizUpload ? '📤 Натисніть для вибору .md файлу' : '📤 Натисніть для вибору PDF')}
               </div>
             </div>
-            <p style={addTestStyles.hint}>Студенти зможуть завантажити це завдання</p>
-          </div>
-
-          {/* Вибір режиму критеріїв */}
-          <div style={styles.inputGroup}>
-            <label style={styles.label}>📊 Критерії оцінювання</label>
-            <div style={addTestStyles.modeSelector}>
-              {/* Кнопка завантаження Excel */}
-              <input
-                type="file"
-                accept=".xlsx,.xls"
-                onChange={handleCriteriaFileChange}
-                style={{ display: 'none' }}
-                id="criteriaFileUpload"
-              />
-              <label 
-                htmlFor="criteriaFileUpload" 
-                style={criteriaFile ? addTestStyles.modeActive : addTestStyles.modeBtn}
-              >
-                {criteriaFile ? `✅ ${criteriaFile.name}` : '📁 Завантажити Excel'}
-              </label>
-              
-              {/* Кнопка ручного вводу */}
-              <button
-                type="button"
-                onClick={() => {
-                  setMode('manual');
-                  setCriteriaFile(null);
-                }}
-                style={mode === 'manual' && !criteriaFile ? addTestStyles.modeActive : addTestStyles.modeBtn}
-              >
-                ✏️ Ввести вручну
-              </button>
-            </div>
             <p style={addTestStyles.hint}>
-              Excel: перший рядок = назви критеріїв, бали в назві (напр: "Критерій – 5 б.")
+              {showQuizUpload
+                ? 'Файл з питаннями A/B/C/D. Формат: **Тест N.M.** Питання, варіанти - A)...D), <details> з відповіддю'
+                : 'Студенти зможуть завантажити це завдання'}
             </p>
+            {showQuizUpload && quizParsedCount > 0 && (
+              <div style={{ marginTop: '10px' }}>
+                <p style={{ color: '#10b981', fontSize: '14px', marginBottom: '8px' }}>
+                  Розпарсено {quizParsedCount} питань з файлу
+                </p>
+                <label style={{ ...styles.label, fontSize: '13px' }}>
+                  Скільки питань показувати кожному студенту?
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max={quizParsedCount}
+                  value={quizQuestionCount}
+                  onChange={(e) => setQuizQuestionCount(e.target.value)}
+                  placeholder={`Усі ${quizParsedCount}`}
+                  style={{ ...styles.input, width: '200px', marginTop: '4px' }}
+                />
+                <p style={addTestStyles.hint}>
+                  {quizQuestionCount && parseInt(quizQuestionCount) > 0 && parseInt(quizQuestionCount) < quizParsedCount
+                    ? `Кожен студент отримає ${quizQuestionCount} випадкових питань з ${quizParsedCount}`
+                    : 'Залиште порожнім — кожен студент отримає усі питання'}
+                </p>
+              </div>
+            )}
           </div>
 
-          {/* Ручний ввід критеріїв */}
-          {mode === 'manual' && !criteriaFile && (
-            <div style={styles.criteriaSection}>
-              {manualCriteria.map((crit, idx) => (
-                <div key={idx} style={styles.criteriaRow}>
+          {/* Математичні завдання */}
+          {showMathTasks && (
+            <div style={styles.inputGroup}>
+              <label style={styles.label}>🔢 Математичні завдання (еталонні відповіді)</label>
+              <p style={{ ...addTestStyles.hint, marginBottom: '12px' }}>
+                Вкажіть завдання та правильну відповідь-формулу. Змінна — x. Підтримується: sin, cos, tan, sqrt, ln, exp, pi, e, ^
+              </p>
+              {mathTasks.map((task, idx) => (
+                <div key={idx} style={mathTaskStyles.taskRow}>
+                  <div style={mathTaskStyles.taskHeader}>
+                    <span style={mathTaskStyles.taskNum}>#{task.task_number}</span>
+                    {mathTasks.length > 1 && (
+                      <button type="button" onClick={() => removeMathTask(idx)} style={styles.removeBtn}>✕</button>
+                    )}
+                  </div>
                   <input
                     type="text"
-                    value={crit.name}
-                    onChange={(e) => updateManualCriteria(idx, 'name', e.target.value)}
-                    style={{ ...styles.input, flex: 2 }}
-                    placeholder="Назва критерію"
-                    required
+                    value={task.description}
+                    onChange={(e) => updateMathTask(idx, 'description', e.target.value)}
+                    style={styles.input}
+                    placeholder="Умова: Розв'яжіть y' = cos(x)"
+                    required={showMathTasks}
                   />
-                  <input
-                    type="number"
-                    value={crit.max_points}
-                    onChange={(e) => updateManualCriteria(idx, 'max_points', e.target.value)}
-                    style={{ ...styles.input, flex: 1, maxWidth: '100px' }}
-                    placeholder="Бали"
-                    min="0"
-                    required
-                  />
-                  {manualCriteria.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => removeManualCriteria(idx)}
-                      style={styles.removeBtn}
-                    >
-                      ✕
-                    </button>
-                  )}
+                  <div style={styles.row}>
+                    <input
+                      type="text"
+                      value={task.reference_answer}
+                      onChange={(e) => updateMathTask(idx, 'reference_answer', e.target.value)}
+                      style={{ ...styles.input, flex: 3, fontFamily: 'monospace' }}
+                      placeholder="Відповідь: sin(x)"
+                      required={showMathTasks}
+                    />
+                    <input
+                      type="number"
+                      value={task.points}
+                      onChange={(e) => updateMathTask(idx, 'points', e.target.value)}
+                      style={{ ...styles.input, flex: 1, maxWidth: '90px' }}
+                      placeholder="Бали"
+                      min="1"
+                    />
+                  </div>
                 </div>
               ))}
-              <button type="button" onClick={addManualCriteria} style={styles.addCriteriaBtn}>
-                + Додати критерій
+              <button type="button" onClick={addMathTask} style={styles.addCriteriaBtn}>
+                + Додати завдання
               </button>
               <p style={styles.totalPoints}>
-                Всього балів: {manualCriteria.reduce((a, c) => a + c.max_points, 0)}
+                Всього балів за формули: {mathTasks.reduce((a, t) => a + (t.points || 0), 0)}
               </p>
             </div>
+          )}
+
+          {/* Критерії AI */}
+          {showCriteria && (
+            <>
+              <div style={styles.inputGroup}>
+                <label style={styles.label}>📊 Критерії оцінювання (для AI)</label>
+                <div style={addTestStyles.modeSelector}>
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls"
+                    onChange={handleCriteriaFileChange}
+                    style={{ display: 'none' }}
+                    id="criteriaFileUpload"
+                  />
+                  <label 
+                    htmlFor="criteriaFileUpload" 
+                    style={criteriaFile ? addTestStyles.modeActive : addTestStyles.modeBtn}
+                  >
+                    {criteriaFile ? `✅ ${criteriaFile.name}` : '📁 Завантажити Excel'}
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => { setMode('manual'); setCriteriaFile(null); }}
+                    style={mode === 'manual' && !criteriaFile ? addTestStyles.modeActive : addTestStyles.modeBtn}
+                  >
+                    ✏️ Ввести вручну
+                  </button>
+                </div>
+                <p style={addTestStyles.hint}>
+                  Excel: перший рядок = назви критеріїв, бали в назві (напр: "Критерій – 5 б.")
+                </p>
+              </div>
+
+              {mode === 'manual' && !criteriaFile && (
+                <div style={styles.criteriaSection}>
+                  {manualCriteria.map((crit, idx) => (
+                    <div key={idx} style={styles.criteriaRow}>
+                      <input
+                        type="text"
+                        value={crit.name}
+                        onChange={(e) => updateManualCriteria(idx, 'name', e.target.value)}
+                        style={{ ...styles.input, flex: 2 }}
+                        placeholder="Назва критерію"
+                        required
+                      />
+                      <input
+                        type="number"
+                        value={crit.max_points}
+                        onChange={(e) => updateManualCriteria(idx, 'max_points', e.target.value)}
+                        style={{ ...styles.input, flex: 1, maxWidth: '100px' }}
+                        placeholder="Бали"
+                        min="0"
+                        required
+                      />
+                      {manualCriteria.length > 1 && (
+                        <button type="button" onClick={() => removeManualCriteria(idx)} style={styles.removeBtn}>✕</button>
+                      )}
+                    </div>
+                  ))}
+                  <button type="button" onClick={addManualCriteria} style={styles.addCriteriaBtn}>
+                    + Додати критерій
+                  </button>
+                  <p style={styles.totalPoints}>
+                    Всього балів AI: {manualCriteria.reduce((a, c) => a + c.max_points, 0)}
+                  </p>
+                </div>
+              )}
+            </>
           )}
 
           <div style={styles.modalActions}>
@@ -1639,6 +1833,129 @@ function ResubmitRequestsView({ requests, onApprove, onReject, showNotification 
 }
 
 // ============================================
+// QUIZ INTERFACE (Student)
+// ============================================
+function QuizInterface({ test, questions, answers, setAnswers, explanations, setExplanations, onSubmit, submitting }) {
+  const [currentSection, setCurrentSection] = useState(null);
+
+  // Group questions by section
+  const sections = [];
+  const sectionMap = {};
+  for (const q of questions) {
+    const key = q.section_title || 'Загальні';
+    if (!sectionMap[key]) {
+      sectionMap[key] = { title: key, questions: [] };
+      sections.push(sectionMap[key]);
+    }
+    sectionMap[key].questions.push(q);
+  }
+
+  const activeSection = currentSection || (sections[0]?.title);
+  const sectionQuestions = sectionMap[activeSection]?.questions || questions;
+  const answeredCount = Object.keys(answers).length;
+  const totalCount = questions.length;
+  const progressPercent = totalCount > 0 ? Math.round((answeredCount / totalCount) * 100) : 0;
+
+  const selectAnswer = (questionId, letter) => {
+    setAnswers(prev => ({ ...prev, [questionId]: letter }));
+  };
+
+  return (
+    <div style={quizStyles.container}>
+      <div style={quizStyles.header}>
+        <h3 style={quizStyles.title}>{test.title}</h3>
+        <div style={quizStyles.progressBar}>
+          <div style={{ ...quizStyles.progressFill, width: `${progressPercent}%` }} />
+        </div>
+        <p style={quizStyles.progressText}>
+          {answeredCount} / {totalCount} питань ({progressPercent}%)
+        </p>
+      </div>
+
+      {sections.length > 1 && (
+        <div style={quizStyles.sectionTabs}>
+          {sections.map(s => {
+            const sAnswered = s.questions.filter(q => answers[q.id]).length;
+            return (
+              <button
+                key={s.title}
+                onClick={() => setCurrentSection(s.title)}
+                style={activeSection === s.title ? quizStyles.sectionTabActive : quizStyles.sectionTab}
+              >
+                {s.title}
+                <span style={quizStyles.sectionCount}>{sAnswered}/{s.questions.length}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      <div style={quizStyles.questionsList}>
+        {sectionQuestions.map((q, idx) => {
+          const selected = answers[q.id];
+          // Group by level within section
+          const showLevel = idx === 0 || q.level_title !== sectionQuestions[idx - 1]?.level_title;
+
+          return (
+            <React.Fragment key={q.id}>
+              {showLevel && q.level_title && (
+                <div style={quizStyles.levelHeader}>{q.level_title}</div>
+              )}
+              <div style={quizStyles.questionCard}>
+                <div style={quizStyles.questionHeader}>
+                  <span style={quizStyles.questionNum}>Тест {q.question_number}</span>
+                  <span style={quizStyles.questionPoints}>{q.points} б.</span>
+                </div>
+                <p style={quizStyles.questionText}>{q.question_text}</p>
+
+                <div style={quizStyles.options}>
+                  {['A', 'B', 'C', 'D'].map(letter => {
+                    const optionText = q[`option_${letter.toLowerCase()}`];
+                    if (!optionText) return null;
+                    const isSelected = selected === letter;
+
+                    return (
+                      <div
+                        key={letter}
+                        onClick={() => selectAnswer(q.id, letter)}
+                        style={isSelected ? quizStyles.optionSelected : quizStyles.option}
+                      >
+                        <span style={isSelected ? quizStyles.optionLetterSelected : quizStyles.optionLetter}>
+                          {letter}
+                        </span>
+                        <span style={quizStyles.optionText}>{optionText}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <textarea
+                  placeholder="Поясніть вашу відповідь (необов'язково)..."
+                  value={explanations[q.id] || ''}
+                  onChange={(e) => setExplanations(prev => ({ ...prev, [q.id]: e.target.value }))}
+                  style={quizStyles.explanationInput}
+                  rows={2}
+                />
+              </div>
+            </React.Fragment>
+          );
+        })}
+      </div>
+
+      <div style={quizStyles.footer}>
+        <button
+          onClick={onSubmit}
+          disabled={submitting || answeredCount === 0}
+          style={quizStyles.submitBtn}
+        >
+          {submitting ? '⏳ Надсилання...' : `✅ Здати тест (${answeredCount}/${totalCount})`}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================
 // STUDENT DASHBOARD
 // ============================================
 function StudentDashboard({ showNotification }) {
@@ -1653,6 +1970,10 @@ function StudentDashboard({ showNotification }) {
   const [resubmitModal, setResubmitModal] = useState(null);
   const [resubmitReason, setResubmitReason] = useState('');
   const [resubmitStatuses, setResubmitStatuses] = useState({});
+  const [quizQuestions, setQuizQuestions] = useState([]);
+  const [quizAnswers, setQuizAnswers] = useState({});
+  const [quizExplanations, setQuizExplanations] = useState({});
+  const [quizSubmitting, setQuizSubmitting] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -1774,6 +2095,35 @@ function StudentDashboard({ showNotification }) {
     setIsSubmitting(false);
   };
 
+  const handleQuizSubmit = async () => {
+    if (!selectedTest || Object.keys(quizAnswers).length === 0) return;
+
+    const unanswered = quizQuestions.length - Object.keys(quizAnswers).length;
+    if (unanswered > 0) {
+      if (!confirm(`Ви не відповіли на ${unanswered} питань. Здати тест?`)) return;
+    }
+
+    setQuizSubmitting(true);
+    try {
+      await api('/submissions/quiz', {
+        method: 'POST',
+        body: { test_id: selectedTest.id, answers: quizAnswers, explanations: quizExplanations }
+      });
+      showNotification('Quiz відповіді збережено! Очікуйте на перевірку.', 'success');
+      setSelectedTest(null);
+      setQuizQuestions([]);
+      setQuizAnswers({});
+      setQuizExplanations({});
+      await loadData();
+      if (selectedDiscipline) {
+        await loadDisciplineDetails(selectedDiscipline.id);
+      }
+    } catch (err) {
+      showNotification(err.message, 'error');
+    }
+    setQuizSubmitting(false);
+  };
+
   if (loading) {
     return <div style={styles.loadingText}>Завантаження...</div>;
   }
@@ -1822,10 +2172,36 @@ function StudentDashboard({ showNotification }) {
                       ...(selectedTest?.id === test.id ? styles.testCardActive : {}),
                       ...(!active && !submitted ? styles.testCardDisabled : {})
                     }}
-                    onClick={() => active && !submitted && setSelectedTest(test)}
+                    onClick={async () => {
+                      if (!active || submitted) return;
+                      setSelectedTest(test);
+                      setQuizQuestions([]);
+                      setQuizAnswers({});
+                      setQuizExplanations({});
+                      if (test.grading_method === 'quiz') {
+                        try {
+                          const data = await api(`/tests/${test.id}/quiz-questions`);
+                          setQuizQuestions(data.questions || []);
+                        } catch (err) {
+                          showNotification('Помилка завантаження питань: ' + err.message, 'error');
+                        }
+                      }
+                    }}
                   >
                     <div style={styles.testCardHeader}>
                       <span style={styles.testCardType}>{testTypeLabels[test.type]}</span>
+                      {test.grading_method && test.grading_method !== 'ai' && (
+                        <span style={{
+                          padding: '2px 8px',
+                          borderRadius: '6px',
+                          fontSize: '11px',
+                          fontWeight: '600',
+                          background: test.grading_method === 'math' ? 'rgba(139, 92, 246, 0.2)' : test.grading_method === 'quiz' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(245, 158, 11, 0.2)',
+                          color: test.grading_method === 'math' ? '#a78bfa' : test.grading_method === 'quiz' ? '#10b981' : '#f59e0b'
+                        }}>
+                          {test.grading_method === 'math' ? '🔢' : test.grading_method === 'quiz' ? '📋' : '🔀'}
+                        </span>
+                      )}
                       {!active && new Date() < new Date(test.start_time) && (
                         <span style={styles.statusBadge}>Очікується</span>
                       )}
@@ -1860,11 +2236,52 @@ function StudentDashboard({ showNotification }) {
           </div>
         )}
 
-        {selectedTest && (
+        {selectedTest && selectedTest.grading_method === 'quiz' && quizQuestions.length > 0 && (
+          <QuizInterface
+            test={selectedTest}
+            questions={quizQuestions}
+            answers={quizAnswers}
+            setAnswers={setQuizAnswers}
+            explanations={quizExplanations}
+            setExplanations={setQuizExplanations}
+            onSubmit={handleQuizSubmit}
+            submitting={quizSubmitting}
+          />
+        )}
+
+        {selectedTest && selectedTest.grading_method !== 'quiz' && (
           <div style={styles.uploadSection}>
             <h3 style={styles.sectionTitle}>
               Завантаження роботи: {selectedTest.title}
             </h3>
+
+            {/* Підказка для математичного тесту */}
+            {(selectedTest.grading_method === 'math' || selectedTest.grading_method === 'mixed') && (
+              <div style={{
+                background: 'rgba(139, 92, 246, 0.15)',
+                border: '1px solid rgba(139, 92, 246, 0.3)',
+                borderRadius: '12px',
+                padding: '16px',
+                marginBottom: '16px',
+                fontSize: '14px',
+                color: '#c4b5fd'
+              }}>
+                <p style={{ fontWeight: '600', marginBottom: '8px' }}>🔢 Цей тест містить формульну перевірку</p>
+                <p style={{ marginBottom: '6px' }}>Завантажте .md файл з відповідями у форматі:</p>
+                <pre style={{
+                  background: 'rgba(0,0,0,0.3)',
+                  padding: '10px',
+                  borderRadius: '8px',
+                  fontSize: '13px',
+                  color: '#e2e8f0',
+                  whiteSpace: 'pre-wrap'
+                }}>{`## Завдання 1\n**Відповідь:** sin(x)\n\n## Завдання 2\n**Відповідь:** x^2 + 1`}</pre>
+                <p style={{ marginTop: '8px', fontSize: '12px', color: '#94a3b8' }}>
+                  Підтримуються: sin, cos, tan, sqrt, ln, exp, abs, pi, e, ^ (степінь)
+                </p>
+              </div>
+            )}
+
             <div style={styles.uploadArea}>
               <input
                 type="file"
@@ -1960,6 +2377,9 @@ function StudentDashboard({ showNotification }) {
           </div>
         )}
 
+        {/* Шаблони для студентів */}
+        <StudentTemplatesSection showNotification={showNotification} />
+
         {/* Модальне вікно запиту на перездачу */}
         {resubmitModal && (
           <div style={styles.modalOverlay}>
@@ -1999,6 +2419,316 @@ function StudentDashboard({ showNotification }) {
     </div>
   );
 }
+
+// ============================================
+// STUDENT TEMPLATES SECTION
+// ============================================
+function StudentTemplatesSection({ showNotification }) {
+  const [templates, setTemplates] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    api('/templates')
+      .then(data => setTemplates(data.templates || []))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const downloadTemplate = async (filename) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_URL}/templates/${filename}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!response.ok) throw new Error('Помилка завантаження');
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      window.URL.revokeObjectURL(url);
+      showNotification('Шаблон завантажено', 'success');
+    } catch (err) {
+      showNotification(err.message, 'error');
+    }
+  };
+
+  if (loading || templates.length === 0) return null;
+
+  return (
+    <div style={{
+      ...styles.mySubmissions,
+      borderColor: expanded ? 'rgba(59,130,246,0.4)' : '#334155'
+    }}>
+      <div 
+        onClick={() => setExpanded(!expanded)}
+        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
+      >
+        <h3 style={{ ...styles.sectionTitle, marginBottom: 0 }}>📋 Шаблони та зразки оформлення</h3>
+        <span style={{ fontSize: '18px', color: '#64748b', transition: 'transform 0.2s', transform: expanded ? 'rotate(180deg)' : 'rotate(0)' }}>▼</span>
+      </div>
+
+      {expanded && (
+        <div style={{ marginTop: '20px' }}>
+          <p style={{ color: '#94a3b8', fontSize: '14px', marginBottom: '20px' }}>
+            Завантажте зразки, щоб правильно оформити відповіді. Це допоможе системі коректно перевірити вашу роботу.
+          </p>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '14px', marginBottom: '20px' }}>
+            {templates.map(tmpl => (
+              <div key={tmpl.filename} style={{
+                background: 'rgba(30, 41, 59, 0.5)',
+                borderRadius: '12px',
+                padding: '16px',
+                border: '1px solid #334155',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px'
+              }}>
+                <span style={{ fontSize: '28px' }}>{tmpl.icon}</span>
+                <div style={{ flex: 1 }}>
+                  <p style={{ fontWeight: '600', color: '#f1f5f9', fontSize: '14px', marginBottom: '2px' }}>{tmpl.name}</p>
+                  <p style={{ color: '#94a3b8', fontSize: '12px' }}>{tmpl.description}</p>
+                </div>
+                <button
+                  onClick={(e) => { e.stopPropagation(); downloadTemplate(tmpl.filename); }}
+                  style={{
+                    padding: '6px 14px',
+                    background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)',
+                    border: 'none',
+                    borderRadius: '8px',
+                    color: 'white',
+                    fontSize: '12px',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                    fontFamily: 'inherit'
+                  }}
+                >
+                  ⬇️
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {/* Швидка підказка */}
+          <div style={{
+            background: 'rgba(59, 130, 246, 0.08)',
+            border: '1px solid rgba(59, 130, 246, 0.2)',
+            borderRadius: '12px',
+            padding: '16px'
+          }}>
+            <p style={{ fontWeight: '600', color: '#f1f5f9', marginBottom: '8px', fontSize: '14px' }}>💡 Як оформити відповіді для математичних тестів</p>
+            <div style={{ 
+              background: 'rgba(15, 23, 42, 0.6)', 
+              borderRadius: '8px', 
+              padding: '12px', 
+              fontFamily: "'Courier New', monospace", 
+              fontSize: '13px', 
+              color: '#94a3b8',
+              lineHeight: '1.6'
+            }}>
+              <div style={{ color: '#8b5cf6' }}>## Завдання 1</div>
+              <div><span style={{ color: '#64748b' }}>**Хід розв'язання:**</span> За правилом диференціювання...</div>
+              <div><span style={{ color: '#10b981', fontWeight: 'bold' }}>**Відповідь:**</span> 3*x^2 + 4*x - 5</div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================
+// TEMPLATES VIEW COMPONENT
+// ============================================
+function TemplatesView({ showNotification }) {
+  const [templates, setTemplates] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    loadTemplates();
+  }, []);
+
+  const loadTemplates = async () => {
+    try {
+      const data = await api('/templates');
+      setTemplates(data.templates || []);
+    } catch (err) {
+      showNotification('Помилка завантаження шаблонів', 'error');
+    }
+    setLoading(false);
+  };
+
+  const downloadTemplate = async (filename) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_URL}/templates/${filename}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!response.ok) throw new Error('Помилка завантаження');
+      
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      window.URL.revokeObjectURL(url);
+      showNotification('Шаблон завантажено', 'success');
+    } catch (err) {
+      showNotification(err.message, 'error');
+    }
+  };
+
+  if (loading) return <div style={styles.loadingText}>Завантаження...</div>;
+
+  const categories = [
+    { key: 'math', title: '🔢 Математичні завдання', desc: 'Шаблони для створення тестів з еталонними формулами' },
+    { key: 'criteria', title: '📊 Критерії оцінювання', desc: 'Шаблони для різних типів дисциплін' },
+    { key: 'student', title: '📝 Для студентів', desc: 'Зразки оформлення відповідей' }
+  ];
+
+  return (
+    <div style={styles.section}>
+      <h3 style={styles.sectionTitle}>Шаблони для завантаження</h3>
+      <p style={{ color: '#94a3b8', marginBottom: '24px', marginTop: '-12px' }}>
+        Завантажте шаблон, заповніть його та завантажте при створенні тесту
+      </p>
+
+      {categories.map(cat => {
+        const catTemplates = templates.filter(t => t.category === cat.key);
+        if (catTemplates.length === 0) return null;
+
+        return (
+          <div key={cat.key} style={{ marginBottom: '28px' }}>
+            <h4 style={{ 
+              fontFamily: "'Montserrat', sans-serif", 
+              fontSize: '18px', 
+              color: '#f1f5f9', 
+              marginBottom: '6px' 
+            }}>
+              {cat.title}
+            </h4>
+            <p style={{ color: '#64748b', fontSize: '13px', marginBottom: '16px' }}>{cat.desc}</p>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '16px' }}>
+              {catTemplates.map(tmpl => (
+                <div key={tmpl.filename} style={templateStyles.card}>
+                  <div style={templateStyles.cardHeader}>
+                    <span style={{ fontSize: '28px' }}>{tmpl.icon}</span>
+                    <div style={{ flex: 1 }}>
+                      <h5 style={templateStyles.cardTitle}>{tmpl.name}</h5>
+                      <p style={templateStyles.cardDesc}>{tmpl.description}</p>
+                    </div>
+                  </div>
+                  <div style={templateStyles.cardFooter}>
+                    <span style={templateStyles.fileSize}>
+                      {tmpl.filename.split('.').pop().toUpperCase()} • {(tmpl.size / 1024).toFixed(0)} КБ
+                    </span>
+                    <button
+                      onClick={() => downloadTemplate(tmpl.filename)}
+                      style={templateStyles.downloadBtn}
+                    >
+                      ⬇️ Завантажити
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+
+      {/* Підказка про логіку оцінювання */}
+      <div style={templateStyles.infoBlock}>
+        <h4 style={{ color: '#f1f5f9', marginBottom: '12px' }}>💡 Як працює гібридне оцінювання математики</h4>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '16px' }}>
+          <div style={templateStyles.infoCard}>
+            <div style={{ fontSize: '24px', marginBottom: '8px' }}>✅</div>
+            <p style={{ fontWeight: '600', color: '#10b981', marginBottom: '4px' }}>Відповідь правильна</p>
+            <p style={{ fontSize: '13px', color: '#94a3b8' }}>Повний бал автоматично — без витрат на API</p>
+          </div>
+          <div style={templateStyles.infoCard}>
+            <div style={{ fontSize: '24px', marginBottom: '8px' }}>🤖</div>
+            <p style={{ fontWeight: '600', color: '#f59e0b', marginBottom: '4px' }}>Відповідь хибна, хід правильний</p>
+            <p style={{ fontSize: '13px', color: '#94a3b8' }}>AI аналізує хід розв'язання і ставить часткові бали</p>
+          </div>
+          <div style={templateStyles.infoCard}>
+            <div style={{ fontSize: '24px', marginBottom: '8px' }}>❌</div>
+            <p style={{ fontWeight: '600', color: '#ef4444', marginBottom: '4px' }}>Все неправильно</p>
+            <p style={{ fontSize: '13px', color: '#94a3b8' }}>0 балів за формулу; AI оцінює оформлення та інші критерії</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const templateStyles = {
+  card: {
+    background: 'linear-gradient(145deg, #1e293b, #0f172a)',
+    borderRadius: '16px',
+    padding: '20px',
+    border: '1px solid #334155',
+    transition: 'all 0.2s'
+  },
+  cardHeader: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: '14px',
+    marginBottom: '16px'
+  },
+  cardTitle: {
+    fontFamily: "'Montserrat', sans-serif",
+    fontSize: '15px',
+    fontWeight: '600',
+    color: '#f1f5f9',
+    marginBottom: '4px'
+  },
+  cardDesc: {
+    fontSize: '13px',
+    color: '#94a3b8',
+    lineHeight: '1.4'
+  },
+  cardFooter: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderTop: '1px solid #334155',
+    paddingTop: '12px'
+  },
+  fileSize: {
+    fontSize: '12px',
+    color: '#64748b'
+  },
+  downloadBtn: {
+    padding: '8px 16px',
+    background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)',
+    border: 'none',
+    borderRadius: '8px',
+    color: 'white',
+    fontSize: '13px',
+    fontWeight: '600',
+    cursor: 'pointer',
+    fontFamily: 'inherit'
+  },
+  infoBlock: {
+    background: 'rgba(59, 130, 246, 0.08)',
+    border: '1px solid rgba(59, 130, 246, 0.2)',
+    borderRadius: '16px',
+    padding: '24px',
+    marginTop: '8px'
+  },
+  infoCard: {
+    background: 'rgba(15, 23, 42, 0.6)',
+    borderRadius: '12px',
+    padding: '16px',
+    textAlign: 'center'
+  }
+};
 
 // ============================================
 // RESULTS VIEW COMPONENT
@@ -3151,6 +3881,239 @@ const addTestStyles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center'
+  }
+};
+
+// Quiz styles
+const quizStyles = {
+  container: {
+    background: 'rgba(15, 23, 42, 0.8)',
+    border: '1px solid #334155',
+    borderRadius: '16px',
+    padding: '24px',
+    marginTop: '24px'
+  },
+  header: {
+    marginBottom: '20px'
+  },
+  title: {
+    color: '#f1f5f9',
+    fontSize: '20px',
+    marginBottom: '12px'
+  },
+  progressBar: {
+    width: '100%',
+    height: '8px',
+    background: '#1e293b',
+    borderRadius: '4px',
+    overflow: 'hidden',
+    marginBottom: '8px'
+  },
+  progressFill: {
+    height: '100%',
+    background: 'linear-gradient(90deg, #10b981, #059669)',
+    borderRadius: '4px',
+    transition: 'width 0.3s ease'
+  },
+  progressText: {
+    color: '#94a3b8',
+    fontSize: '13px'
+  },
+  sectionTabs: {
+    display: 'flex',
+    gap: '8px',
+    marginBottom: '20px',
+    flexWrap: 'wrap'
+  },
+  sectionTab: {
+    padding: '8px 16px',
+    background: 'rgba(30, 41, 59, 0.5)',
+    border: '1px solid #334155',
+    borderRadius: '8px',
+    color: '#94a3b8',
+    cursor: 'pointer',
+    fontSize: '13px',
+    fontFamily: 'inherit',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px'
+  },
+  sectionTabActive: {
+    padding: '8px 16px',
+    background: 'rgba(16, 185, 129, 0.15)',
+    border: '1px solid #10b981',
+    borderRadius: '8px',
+    color: '#10b981',
+    cursor: 'pointer',
+    fontSize: '13px',
+    fontFamily: 'inherit',
+    fontWeight: '600',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px'
+  },
+  sectionCount: {
+    fontSize: '11px',
+    opacity: 0.7
+  },
+  levelHeader: {
+    color: '#64748b',
+    fontSize: '13px',
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: '0.5px',
+    padding: '12px 0 4px',
+    borderBottom: '1px solid #1e293b',
+    marginBottom: '12px'
+  },
+  questionsList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '16px'
+  },
+  questionCard: {
+    background: 'rgba(30, 41, 59, 0.5)',
+    border: '1px solid #334155',
+    borderRadius: '12px',
+    padding: '20px'
+  },
+  questionHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '10px'
+  },
+  questionNum: {
+    color: '#10b981',
+    fontWeight: '700',
+    fontSize: '14px'
+  },
+  questionPoints: {
+    color: '#64748b',
+    fontSize: '12px'
+  },
+  questionText: {
+    color: '#e2e8f0',
+    fontSize: '15px',
+    lineHeight: '1.6',
+    marginBottom: '14px',
+    whiteSpace: 'pre-wrap'
+  },
+  options: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px'
+  },
+  option: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: '12px',
+    padding: '12px 16px',
+    background: 'rgba(15, 23, 42, 0.5)',
+    border: '2px solid #334155',
+    borderRadius: '10px',
+    cursor: 'pointer',
+    transition: 'all 0.15s ease'
+  },
+  optionSelected: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: '12px',
+    padding: '12px 16px',
+    background: 'rgba(16, 185, 129, 0.1)',
+    border: '2px solid #10b981',
+    borderRadius: '10px',
+    cursor: 'pointer',
+    transition: 'all 0.15s ease'
+  },
+  optionLetter: {
+    minWidth: '28px',
+    height: '28px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: '6px',
+    background: '#1e293b',
+    color: '#94a3b8',
+    fontWeight: '700',
+    fontSize: '13px',
+    flexShrink: 0
+  },
+  optionLetterSelected: {
+    minWidth: '28px',
+    height: '28px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: '6px',
+    background: '#10b981',
+    color: 'white',
+    fontWeight: '700',
+    fontSize: '13px',
+    flexShrink: 0
+  },
+  optionText: {
+    color: '#e2e8f0',
+    fontSize: '14px',
+    lineHeight: '1.5',
+    paddingTop: '2px'
+  },
+  footer: {
+    marginTop: '24px',
+    display: 'flex',
+    justifyContent: 'center'
+  },
+  submitBtn: {
+    padding: '16px 40px',
+    background: 'linear-gradient(135deg, #10b981, #059669)',
+    border: 'none',
+    borderRadius: '12px',
+    color: 'white',
+    fontSize: '16px',
+    fontWeight: '600',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    transition: 'all 0.2s'
+  },
+  explanationInput: {
+    width: '100%',
+    marginTop: '12px',
+    padding: '10px 14px',
+    background: 'rgba(15, 23, 42, 0.6)',
+    border: '1px solid #334155',
+    borderRadius: '8px',
+    color: '#e2e8f0',
+    fontSize: '13px',
+    lineHeight: '1.5',
+    fontFamily: 'inherit',
+    resize: 'vertical',
+    outline: 'none',
+    boxSizing: 'border-box'
+  }
+};
+
+// Math task styles
+const mathTaskStyles = {
+  taskRow: {
+    background: 'rgba(139, 92, 246, 0.1)',
+    border: '1px solid rgba(139, 92, 246, 0.3)',
+    borderRadius: '12px',
+    padding: '16px',
+    marginBottom: '12px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '10px'
+  },
+  taskHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center'
+  },
+  taskNum: {
+    fontFamily: "'Montserrat', sans-serif",
+    fontWeight: '700',
+    color: '#a78bfa',
+    fontSize: '16px'
   }
 };
 

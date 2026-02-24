@@ -121,6 +121,7 @@ function setupRoutes() {
     const submissionsRoutes = require('./routes/submissions');
     const reportsRoutes = require('./routes/reports');
     const batchRoutes = require('./routes/batch');
+    const templatesRoutes = require('./routes/templates');
 
     app.use('/api/auth', authRoutes);
     app.use('/api/disciplines', disciplinesRoutes);
@@ -128,6 +129,7 @@ function setupRoutes() {
     app.use('/api/submissions', submissionsRoutes);
     app.use('/api/reports', reportsRoutes);
     app.use('/api/batch', batchRoutes);
+    app.use('/api/templates', templatesRoutes);
     
     // ============================================
     // СТАТИЧНІ ФАЙЛИ КЛІЄНТА (Production)
@@ -222,6 +224,142 @@ async function runMigrations() {
         db.run('CREATE INDEX IF NOT EXISTS idx_resubmit_requests_status ON resubmit_requests(status)');
         db.run('CREATE INDEX IF NOT EXISTS idx_resubmit_requests_test ON resubmit_requests(test_id)');
         
+        // v27: Додаємо grading_method до tests
+        try {
+            const testsInfo = db.exec("PRAGMA table_info(tests)");
+            if (testsInfo.length > 0) {
+                const cols = testsInfo[0].values.map(row => row[1]);
+                if (!cols.includes('grading_method')) {
+                    db.run("ALTER TABLE tests ADD COLUMN grading_method TEXT DEFAULT 'ai'");
+                    console.log('  + Додано tests.grading_method');
+                }
+            }
+        } catch (e) {
+            console.log('  ⚠️ grading_method:', e.message);
+        }
+        
+        // v27: Таблиця математичних завдань з еталонними відповідями
+        db.run(`
+            CREATE TABLE IF NOT EXISTS math_tasks (
+                id INTEGER PRIMARY KEY,
+                test_id INTEGER NOT NULL,
+                task_number INTEGER NOT NULL,
+                description TEXT NOT NULL,
+                reference_answer TEXT NOT NULL,
+                points INTEGER NOT NULL DEFAULT 10,
+                config_json TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE,
+                UNIQUE(test_id, task_number)
+            )
+        `);
+        db.run('CREATE INDEX IF NOT EXISTS idx_math_tasks_test ON math_tasks(test_id)');
+        
+        // v27: Таблиця результатів мат. перевірки
+        db.run(`
+            CREATE TABLE IF NOT EXISTS math_results (
+                id INTEGER PRIMARY KEY,
+                submission_id INTEGER NOT NULL,
+                math_task_id INTEGER NOT NULL,
+                student_answer TEXT,
+                is_correct INTEGER DEFAULT 0,
+                match_percentage REAL DEFAULT 0,
+                points_earned INTEGER DEFAULT 0,
+                details_json TEXT,
+                FOREIGN KEY (submission_id) REFERENCES submissions(id) ON DELETE CASCADE,
+                FOREIGN KEY (math_task_id) REFERENCES math_tasks(id) ON DELETE CASCADE,
+                UNIQUE(submission_id, math_task_id)
+            )
+        `);
+        db.run('CREATE INDEX IF NOT EXISTS idx_math_results_submission ON math_results(submission_id)');
+
+        // v28: Таблиця quiz-питань (парсяться з .md файлу)
+        db.run(`
+            CREATE TABLE IF NOT EXISTS quiz_questions (
+                id INTEGER PRIMARY KEY,
+                test_id INTEGER NOT NULL,
+                question_number TEXT NOT NULL,
+                section_title TEXT,
+                level_title TEXT,
+                question_text TEXT NOT NULL,
+                option_a TEXT,
+                option_b TEXT,
+                option_c TEXT,
+                option_d TEXT,
+                correct_answer TEXT,
+                correct_explanation TEXT,
+                points INTEGER NOT NULL DEFAULT 1,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE
+            )
+        `);
+        db.run('CREATE INDEX IF NOT EXISTS idx_quiz_questions_test ON quiz_questions(test_id)');
+
+        // v28: Таблиця відповідей студентів на quiz
+        db.run(`
+            CREATE TABLE IF NOT EXISTS quiz_answers (
+                id INTEGER PRIMARY KEY,
+                submission_id INTEGER NOT NULL,
+                quiz_question_id INTEGER NOT NULL,
+                student_answer TEXT,
+                is_correct INTEGER,
+                points_earned INTEGER DEFAULT 0,
+                ai_explanation TEXT,
+                FOREIGN KEY (submission_id) REFERENCES submissions(id) ON DELETE CASCADE,
+                FOREIGN KEY (quiz_question_id) REFERENCES quiz_questions(id) ON DELETE CASCADE,
+                UNIQUE(submission_id, quiz_question_id)
+            )
+        `);
+        db.run('CREATE INDEX IF NOT EXISTS idx_quiz_answers_submission ON quiz_answers(submission_id)');
+
+        // v29: Додаємо quiz_question_count до tests (скільки питань показувати студенту)
+        try {
+            const testsInfo2 = db.exec("PRAGMA table_info(tests)");
+            if (testsInfo2.length > 0) {
+                const cols2 = testsInfo2[0].values.map(row => row[1]);
+                if (!cols2.includes('quiz_question_count')) {
+                    db.run("ALTER TABLE tests ADD COLUMN quiz_question_count INTEGER");
+                    console.log('  + Додано tests.quiz_question_count');
+                }
+            }
+        } catch (e) {
+            console.log('  ⚠️ quiz_question_count:', e.message);
+        }
+
+        // v29: Таблиця персональних наборів quiz-питань для кожного студента
+        db.run(`
+            CREATE TABLE IF NOT EXISTS quiz_student_sets (
+                id INTEGER PRIMARY KEY,
+                test_id INTEGER NOT NULL,
+                student_id INTEGER NOT NULL,
+                question_ids_json TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE,
+                FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE,
+                UNIQUE(test_id, student_id)
+            )
+        `);
+        db.run('CREATE INDEX IF NOT EXISTS idx_quiz_student_sets_test ON quiz_student_sets(test_id)');
+
+        // v30: Додаємо student_explanation та explanation_score до quiz_answers
+        try {
+            const qaInfo = db.exec("PRAGMA table_info(quiz_answers)");
+            if (qaInfo.length > 0) {
+                const qaCols = qaInfo[0].values.map(row => row[1]);
+                if (!qaCols.includes('student_explanation')) {
+                    db.run("ALTER TABLE quiz_answers ADD COLUMN student_explanation TEXT");
+                    console.log('  + Додано quiz_answers.student_explanation');
+                }
+                if (!qaCols.includes('explanation_score')) {
+                    db.run("ALTER TABLE quiz_answers ADD COLUMN explanation_score INTEGER DEFAULT 0");
+                    console.log('  + Додано quiz_answers.explanation_score');
+                }
+            }
+        } catch (e) {
+            console.log('  ⚠️ quiz_answers explanation columns:', e.message);
+        }
+
         saveDatabase();
         console.log('✅ Міграції виконано');
     } catch (err) {

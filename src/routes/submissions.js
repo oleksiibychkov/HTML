@@ -517,6 +517,116 @@ router.post('/', authMiddleware, studentOnly, upload.single('file'), async (req,
 });
 
 // ============================================
+// ЗДАТИ QUIZ (СТУДЕНТ) — без файлу
+// ============================================
+router.post('/quiz', authMiddleware, studentOnly, (req, res) => {
+    try {
+        const { test_id, answers, explanations } = req.body;
+
+        if (!test_id) {
+            return res.status(400).json({ error: 'Вкажіть ID тесту' });
+        }
+        if (!answers || typeof answers !== 'object' || Object.keys(answers).length === 0) {
+            return res.status(400).json({ error: 'Вкажіть відповіді' });
+        }
+
+        // Перевіряємо тест
+        const test = queryOne(`
+            SELECT t.*, d.name as discipline_name
+            FROM tests t
+            JOIN disciplines d ON t.discipline_id = d.id
+            WHERE t.id = @id AND t.is_active = 1
+        `, { id: parseInt(test_id) });
+
+        if (!test) {
+            return res.status(404).json({ error: 'Тест не знайдено' });
+        }
+
+        if (test.grading_method !== 'quiz') {
+            return res.status(400).json({ error: 'Цей тест не є quiz-тестом' });
+        }
+
+        // Перевіряємо час
+        const now = new Date();
+        const ukraineOffset = 2 * 60 * 60 * 1000;
+        const nowUkraine = new Date(now.getTime() + ukraineOffset);
+        const nowStr = nowUkraine.toISOString().slice(0, 16);
+        const startStr = test.start_time.slice(0, 16);
+        const endStr = test.end_time.slice(0, 16);
+
+        if (nowStr < startStr) {
+            return res.status(400).json({ error: 'Тест ще не розпочався' });
+        }
+        if (nowStr > endStr) {
+            return res.status(400).json({ error: 'Час здачі тесту вичерпано' });
+        }
+
+        // Перевіряємо чи вже здавав
+        const existing = queryOne(
+            'SELECT id FROM submissions WHERE test_id = @testId AND student_id = @studentId',
+            { testId: test.id, studentId: req.user.id }
+        );
+
+        if (existing) {
+            return res.status(409).json({ error: 'Ви вже здавали цей тест' });
+        }
+
+        // Створюємо submission
+        const result = execute(`
+            INSERT INTO submissions (student_id, test_id, original_filename, file_path, extracted_text, status)
+            VALUES (@studentId, @testId, 'quiz', 'quiz', 'quiz submission', 'pending')
+        `, {
+            studentId: req.user.id,
+            testId: test.id
+        });
+
+        const submissionId = result.lastInsertRowid;
+
+        // Зберігаємо відповіді в quiz_answers
+        const validAnswers = ['A', 'B', 'C', 'D'];
+        let savedCount = 0;
+
+        const explMap = (explanations && typeof explanations === 'object') ? explanations : {};
+
+        for (const [questionId, answer] of Object.entries(answers)) {
+            const qId = parseInt(questionId);
+            if (!qId || !validAnswers.includes(String(answer).toUpperCase())) continue;
+
+            const explanation = explMap[questionId] ? String(explMap[questionId]).trim().substring(0, 2000) : null;
+
+            try {
+                execute(`
+                    INSERT INTO quiz_answers (submission_id, quiz_question_id, student_answer, student_explanation)
+                    VALUES (@subId, @qId, @answer, @explanation)
+                `, {
+                    subId: submissionId,
+                    qId,
+                    answer: String(answer).toUpperCase(),
+                    explanation: explanation || null
+                });
+                savedCount++;
+            } catch (e) {
+                console.error('Quiz answer save error:', e.message);
+            }
+        }
+
+        res.status(201).json({
+            message: 'Quiz відповіді збережено! Очікуйте на перевірку.',
+            submission: {
+                id: submissionId,
+                test_id: test.id,
+                status: 'pending',
+                answers_count: savedCount
+            }
+        });
+
+    } catch (err) {
+        console.error('Помилка здачі quiz:', err);
+        res.status(500).json({ error: 'Помилка сервера' });
+    }
+});
+
+// ============================================
 // СПИСОК РОБІТ
 // ============================================
 router.get('/', authMiddleware, (req, res) => {
@@ -692,6 +802,57 @@ router.get('/:id', authMiddleware, (req, res) => {
             }
         }
         
+        // Отримуємо результати мат. перевірки
+        const mathResults = queryAll(`
+            SELECT mr.*, mt.task_number, mt.description, mt.reference_answer, mt.points as max_points
+            FROM math_results mr
+            JOIN math_tasks mt ON mr.math_task_id = mt.id
+            WHERE mr.submission_id = @subId
+            ORDER BY mt.task_number
+        `, { subId: submissionId });
+        
+        if (mathResults.length > 0) {
+            submission.math_results = mathResults.map(r => ({
+                task_number: r.task_number,
+                description: r.description,
+                reference_answer: r.reference_answer,
+                student_answer: r.student_answer,
+                is_correct: !!r.is_correct,
+                match_percentage: r.match_percentage,
+                points_earned: r.points_earned,
+                max_points: r.max_points
+            }));
+        }
+
+        // Отримуємо результати quiz-перевірки
+        const quizResults = queryAll(`
+            SELECT qa.*, qq.question_number, qq.question_text, qq.option_a, qq.option_b,
+                   qq.option_c, qq.option_d, qq.correct_answer, qq.points as max_points
+            FROM quiz_answers qa
+            JOIN quiz_questions qq ON qa.quiz_question_id = qq.id
+            WHERE qa.submission_id = @subId
+            ORDER BY qq.sort_order
+        `, { subId: submissionId });
+
+        if (quizResults.length > 0) {
+            submission.quiz_results = quizResults.map(r => ({
+                question_number: r.question_number,
+                question_text: r.question_text,
+                option_a: r.option_a,
+                option_b: r.option_b,
+                option_c: r.option_c,
+                option_d: r.option_d,
+                correct_answer: r.correct_answer,
+                student_answer: r.student_answer,
+                is_correct: r.is_correct === 1,
+                points_earned: r.points_earned,
+                max_points: r.max_points,
+                ai_explanation: r.ai_explanation,
+                student_explanation: r.student_explanation,
+                explanation_score: r.explanation_score || 0
+            }));
+        }
+
         res.json({ submission });
         
     } catch (err) {
