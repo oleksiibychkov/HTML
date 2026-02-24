@@ -1437,24 +1437,78 @@ router.get('/:id/task-file', authMiddleware, (req, res) => {
 router.delete('/:id', authMiddleware, teacherOnly, (req, res) => {
     try {
         const testId = parseInt(req.params.id);
-        
+
         const test = queryOne(`
             SELECT t.*, d.teacher_id
             FROM tests t
             JOIN disciplines d ON t.discipline_id = d.id
             WHERE t.id = @id
         `, { id: testId });
-        
+
         if (!test || test.teacher_id !== req.user.id) {
             return res.status(404).json({ error: 'Тест не знайдено' });
         }
-        
+
         execute(`UPDATE tests SET is_active = 0 WHERE id = @id`, { id: testId });
-        
+
         res.json({ message: 'Тест видалено' });
-        
+
     } catch (err) {
         console.error('Помилка видалення:', err);
+        res.status(500).json({ error: 'Помилка сервера' });
+    }
+});
+
+// ============================================
+// ПОВНЕ ВИДАЛЕННЯ ТЕСТУ (hard delete)
+// ============================================
+router.delete('/:id/permanent', authMiddleware, teacherOnly, (req, res) => {
+    try {
+        const testId = parseInt(req.params.id);
+
+        const test = queryOne(`
+            SELECT t.*, d.teacher_id
+            FROM tests t
+            JOIN disciplines d ON t.discipline_id = d.id
+            WHERE t.id = @id
+        `, { id: testId });
+
+        if (!test || test.teacher_id !== req.user.id) {
+            return res.status(404).json({ error: 'Тест не знайдено' });
+        }
+
+        // Видаляємо файли тесту
+        for (const fileProp of ['task_file', 'criteria_file']) {
+            if (test[fileProp]) {
+                const fullPath = path.resolve(__dirname, '../../', test[fileProp]);
+                if (fs.existsSync(fullPath)) {
+                    try { fs.unlinkSync(fullPath); } catch (e) { /* ignore */ }
+                }
+            }
+        }
+
+        // Видаляємо файли здач
+        const submissions = queryAll(
+            'SELECT file_path FROM submissions WHERE test_id = @testId',
+            { testId }
+        );
+        for (const sub of submissions) {
+            if (sub.file_path) {
+                const fullPath = path.resolve(__dirname, '../../', sub.file_path);
+                if (fs.existsSync(fullPath)) {
+                    try { fs.unlinkSync(fullPath); } catch (e) { /* ignore */ }
+                }
+            }
+        }
+
+        // CASCADE видалить criteria, submissions, grades, quiz data, math data
+        execute('DELETE FROM tests WHERE id = @id', { id: testId });
+        const { saveDatabase } = require('../database/connection');
+        saveDatabase();
+
+        res.json({ message: `Тест "${test.title}" повністю видалено` });
+    } catch (err) {
+        console.error('Помилка повного видалення тесту:', err);
         res.status(500).json({ error: 'Помилка сервера' });
     }
 });

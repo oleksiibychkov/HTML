@@ -1679,6 +1679,58 @@ router.get('/discipline/:disciplineId/stats', authMiddleware, teacherOnly, (req,
 });
 
 // ============================================
+// ОЧИСТИТИ ВСІ РЕЗУЛЬТАТИ ТЕСТУ
+// ============================================
+router.post('/test/:testId/clear-results', authMiddleware, teacherOnly, (req, res) => {
+    try {
+        const testId = parseInt(req.params.testId);
+
+        const test = queryOne(`
+            SELECT t.*, d.teacher_id
+            FROM tests t
+            JOIN disciplines d ON t.discipline_id = d.id
+            WHERE t.id = @id
+        `, { id: testId });
+
+        if (!test || test.teacher_id !== req.user.id) {
+            return res.status(404).json({ error: 'Тест не знайдено' });
+        }
+
+        // Видаляємо файли здач
+        const submissions = queryAll(
+            'SELECT file_path FROM submissions WHERE test_id = @testId',
+            { testId }
+        );
+        for (const sub of submissions) {
+            if (sub.file_path) {
+                const fullPath = path.resolve(__dirname, '../../', sub.file_path);
+                if (fs.existsSync(fullPath)) {
+                    try { fs.unlinkSync(fullPath); } catch (e) { /* ignore */ }
+                }
+            }
+        }
+
+        // CASCADE видалить submission_grades, quiz_answers, math_results
+        const count = submissions.length;
+        execute('DELETE FROM submissions WHERE test_id = @testId', { testId });
+
+        // Також видаляємо quiz_student_sets щоб студенти отримали нові набори
+        execute('DELETE FROM quiz_student_sets WHERE test_id = @testId', { testId });
+
+        // Також очищуємо resubmit_requests
+        execute('DELETE FROM resubmit_requests WHERE test_id = @testId', { testId });
+
+        const { saveDatabase } = require('../database/connection');
+        saveDatabase();
+
+        res.json({ message: `Видалено ${count} здач для тесту "${test.title}"`, count });
+    } catch (err) {
+        console.error('Помилка очищення результатів:', err);
+        res.status(500).json({ error: 'Помилка сервера' });
+    }
+});
+
+// ============================================
 // ВИДАЛИТИ ОКРЕМУ ЗДАЧУ
 // ============================================
 router.delete('/:id', authMiddleware, teacherOnly, (req, res) => {

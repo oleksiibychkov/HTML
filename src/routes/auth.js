@@ -12,7 +12,8 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const { queryOne, execute } = require('../database/connection');
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, teacherOnly } = require('../middleware/auth');
+const { saveDatabase } = require('../database/connection');
 
 const router = express.Router();
 
@@ -218,6 +219,136 @@ router.post('/logout', authMiddleware, (req, res) => {
 // ============================================
 router.get('/me', authMiddleware, (req, res) => {
     res.json({ user: req.user });
+});
+
+// ============================================
+// СПИСОК СТУДЕНТІВ (для панелі налаштувань)
+// ============================================
+router.get('/students', authMiddleware, teacherOnly, (req, res) => {
+    try {
+        const students = queryAll(`
+            SELECT u.id, u.name, u.email, u.student_group, u.course, u.created_at,
+                   COUNT(DISTINCT s.id) as submissions_count,
+                   COUNT(DISTINCT s.test_id) as tests_count
+            FROM users u
+            LEFT JOIN submissions s ON s.student_id = u.id
+            LEFT JOIN tests t ON s.test_id = t.id
+            LEFT JOIN disciplines d ON t.discipline_id = d.id AND d.teacher_id = @teacherId
+            WHERE u.role = 'student' AND u.is_active = 1
+            AND (d.teacher_id = @teacherId OR s.id IS NULL)
+            GROUP BY u.id
+            HAVING submissions_count > 0
+            ORDER BY u.name ASC
+        `, { teacherId: req.user.id });
+
+        res.json({ students });
+    } catch (err) {
+        console.error('Помилка отримання студентів:', err);
+        res.status(500).json({ error: 'Помилка сервера' });
+    }
+});
+
+// ============================================
+// ВИДАЛИТИ СТУДЕНТА (тільки студента, не викладача)
+// ============================================
+router.delete('/users/:id', authMiddleware, teacherOnly, (req, res) => {
+    try {
+        const userId = parseInt(req.params.id);
+
+        const user = queryOne('SELECT id, name, email, role FROM users WHERE id = @id', { id: userId });
+        if (!user) {
+            return res.status(404).json({ error: 'Користувача не знайдено' });
+        }
+        if (user.role !== 'student') {
+            return res.status(403).json({ error: 'Можна видаляти тільки студентів' });
+        }
+
+        // Видаляємо файли здач цього студента
+        const submissions = queryAll(
+            'SELECT file_path FROM submissions WHERE student_id = @id',
+            { id: userId }
+        );
+        const fs = require('fs');
+        const path = require('path');
+        for (const sub of submissions) {
+            if (sub.file_path) {
+                const fullPath = path.resolve(__dirname, '../../', sub.file_path);
+                if (fs.existsSync(fullPath)) {
+                    try { fs.unlinkSync(fullPath); } catch (e) { /* ignore */ }
+                }
+            }
+        }
+
+        // CASCADE видалить submissions, quiz_answers, sessions, resubmit_requests
+        execute('DELETE FROM users WHERE id = @id', { id: userId });
+        saveDatabase();
+
+        res.json({ message: `Студента ${user.name} видалено` });
+    } catch (err) {
+        console.error('Помилка видалення студента:', err);
+        res.status(500).json({ error: 'Помилка сервера' });
+    }
+});
+
+// ============================================
+// ВИДАЛИТИ СВІЙ АКАУНТ (викладач)
+// ============================================
+router.delete('/me', authMiddleware, (req, res) => {
+    try {
+        const { confirmEmail } = req.body;
+
+        if (!confirmEmail || confirmEmail.toLowerCase() !== req.user.email.toLowerCase()) {
+            return res.status(400).json({ error: 'Для підтвердження введіть свій email' });
+        }
+
+        const fs = require('fs');
+        const path = require('path');
+
+        // Видаляємо файли тестів та здач
+        const tests = queryAll(`
+            SELECT t.task_file, t.criteria_file
+            FROM tests t
+            JOIN disciplines d ON t.discipline_id = d.id
+            WHERE d.teacher_id = @teacherId
+        `, { teacherId: req.user.id });
+
+        for (const test of tests) {
+            for (const fileProp of ['task_file', 'criteria_file']) {
+                if (test[fileProp]) {
+                    const fullPath = path.resolve(__dirname, '../../', test[fileProp]);
+                    if (fs.existsSync(fullPath)) {
+                        try { fs.unlinkSync(fullPath); } catch (e) { /* ignore */ }
+                    }
+                }
+            }
+        }
+
+        const submissions = queryAll(`
+            SELECT s.file_path
+            FROM submissions s
+            JOIN tests t ON s.test_id = t.id
+            JOIN disciplines d ON t.discipline_id = d.id
+            WHERE d.teacher_id = @teacherId
+        `, { teacherId: req.user.id });
+
+        for (const sub of submissions) {
+            if (sub.file_path) {
+                const fullPath = path.resolve(__dirname, '../../', sub.file_path);
+                if (fs.existsSync(fullPath)) {
+                    try { fs.unlinkSync(fullPath); } catch (e) { /* ignore */ }
+                }
+            }
+        }
+
+        // CASCADE видалить disciplines, tests, submissions, sessions, тощо
+        execute('DELETE FROM users WHERE id = @id', { id: req.user.id });
+        saveDatabase();
+
+        res.json({ message: 'Ваш акаунт видалено', logout: true });
+    } catch (err) {
+        console.error('Помилка видалення акаунту:', err);
+        res.status(500).json({ error: 'Помилка сервера' });
+    }
 });
 
 module.exports = router;

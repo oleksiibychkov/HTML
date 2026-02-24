@@ -10,7 +10,9 @@
  */
 
 const express = require('express');
-const { queryAll, queryOne, execute } = require('../database/connection');
+const fs = require('fs');
+const path = require('path');
+const { queryAll, queryOne, execute, saveDatabase } = require('../database/connection');
 const { authMiddleware, teacherOnly } = require('../middleware/auth');
 
 const router = express.Router();
@@ -243,6 +245,65 @@ router.delete('/:id', authMiddleware, teacherOnly, (req, res) => {
         
     } catch (err) {
         console.error('Помилка видалення дисципліни:', err);
+        res.status(500).json({ error: 'Помилка сервера' });
+    }
+});
+
+// ============================================
+// ПОВНЕ ВИДАЛЕННЯ ДИСЦИПЛІНИ (hard delete)
+// ============================================
+router.delete('/:id/permanent', authMiddleware, teacherOnly, (req, res) => {
+    try {
+        const disciplineId = parseInt(req.params.id);
+
+        const existing = queryOne(
+            'SELECT * FROM disciplines WHERE id = @id AND teacher_id = @teacherId',
+            { id: disciplineId, teacherId: req.user.id }
+        );
+
+        if (!existing) {
+            return res.status(404).json({ error: 'Дисципліну не знайдено' });
+        }
+
+        // Збираємо файли тестів та здач для видалення
+        const tests = queryAll(
+            'SELECT id, task_file, criteria_file FROM tests WHERE discipline_id = @id',
+            { id: disciplineId }
+        );
+
+        for (const test of tests) {
+            // Видаляємо файли тесту
+            for (const fileProp of ['task_file', 'criteria_file']) {
+                if (test[fileProp]) {
+                    const fullPath = path.resolve(__dirname, '../../', test[fileProp]);
+                    if (fs.existsSync(fullPath)) {
+                        try { fs.unlinkSync(fullPath); } catch (e) { /* ignore */ }
+                    }
+                }
+            }
+
+            // Видаляємо файли здач
+            const submissions = queryAll(
+                'SELECT file_path FROM submissions WHERE test_id = @testId',
+                { testId: test.id }
+            );
+            for (const sub of submissions) {
+                if (sub.file_path) {
+                    const fullPath = path.resolve(__dirname, '../../', sub.file_path);
+                    if (fs.existsSync(fullPath)) {
+                        try { fs.unlinkSync(fullPath); } catch (e) { /* ignore */ }
+                    }
+                }
+            }
+        }
+
+        // CASCADE видалить tests, criteria, submissions, grades, quiz data, тощо
+        execute('DELETE FROM disciplines WHERE id = @id', { id: disciplineId });
+        saveDatabase();
+
+        res.json({ message: `Дисципліну "${existing.name}" повністю видалено` });
+    } catch (err) {
+        console.error('Помилка повного видалення дисципліни:', err);
         res.status(500).json({ error: 'Помилка сервера' });
     }
 });

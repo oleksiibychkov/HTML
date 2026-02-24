@@ -593,11 +593,17 @@ function TeacherDashboard({ showNotification }) {
             </span>
           )}
         </button>
-        <button 
+        <button
           onClick={() => setActiveTab('templates')}
           style={activeTab === 'templates' ? styles.tabActive : styles.tab}
         >
           📋 Шаблони
+        </button>
+        <button
+          onClick={() => setActiveTab('settings')}
+          style={activeTab === 'settings' ? styles.tabActive : styles.tab}
+        >
+          ⚙️ Налаштування
         </button>
       </div>
 
@@ -686,6 +692,14 @@ function TeacherDashboard({ showNotification }) {
 
       {activeTab === 'templates' && (
         <TemplatesView showNotification={showNotification} />
+      )}
+
+      {activeTab === 'settings' && (
+        <SettingsView
+          disciplines={disciplines}
+          showNotification={showNotification}
+          onUpdate={loadData}
+        />
       )}
 
       {showAddDiscipline && (
@@ -4339,6 +4353,424 @@ const globalStyles = `
     cursor: not-allowed;
   }
 `;
+
+// ============================================
+// НАЛАШТУВАННЯ ВИКЛАДАЧА (Settings)
+// ============================================
+function SettingsView({ disciplines, showNotification, onUpdate }) {
+  const { user, logout } = useAuth();
+  const [students, setStudents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [expandedDisc, setExpandedDisc] = useState(null);
+  const [discTests, setDiscTests] = useState({});
+  const [confirmAction, setConfirmAction] = useState(null);
+  const [deleteEmail, setDeleteEmail] = useState('');
+  const [actionLoading, setActionLoading] = useState(false);
+
+  useEffect(() => {
+    loadStudents();
+  }, []);
+
+  const loadStudents = async () => {
+    try {
+      const data = await api('/auth/students');
+      setStudents(data.students || []);
+    } catch (err) {
+      console.log('Немає студентів');
+    }
+    setLoading(false);
+  };
+
+  const loadDiscTests = async (discId) => {
+    if (expandedDisc === discId) {
+      setExpandedDisc(null);
+      return;
+    }
+    try {
+      const data = await api(`/disciplines/${discId}`);
+      setDiscTests(prev => ({ ...prev, [discId]: data.discipline?.tests || [] }));
+      setExpandedDisc(discId);
+    } catch (err) {
+      showNotification(err.message, 'error');
+    }
+  };
+
+  const executeAction = async () => {
+    if (!confirmAction) return;
+    setActionLoading(true);
+    try {
+      const { type, id, name } = confirmAction;
+      if (type === 'deleteStudent') {
+        await api(`/auth/users/${id}`, { method: 'DELETE' });
+        showNotification(`Студента видалено`, 'success');
+        loadStudents();
+      } else if (type === 'deleteDiscipline') {
+        await api(`/disciplines/${id}/permanent`, { method: 'DELETE' });
+        showNotification(`Дисципліну "${name}" видалено назавжди`, 'success');
+        onUpdate();
+      } else if (type === 'deleteTest') {
+        await api(`/tests/${id}/permanent`, { method: 'DELETE' });
+        showNotification(`Тест "${name}" видалено назавжди`, 'success');
+        onUpdate();
+        if (expandedDisc) loadDiscTests(expandedDisc);
+      } else if (type === 'clearResults') {
+        const data = await api(`/submissions/test/${id}/clear-results`, { method: 'POST' });
+        showNotification(`Видалено ${data.count || 0} здач`, 'success');
+        if (expandedDisc) loadDiscTests(expandedDisc);
+      } else if (type === 'deleteAccount') {
+        if (deleteEmail.toLowerCase() !== user.email.toLowerCase()) {
+          showNotification('Email не співпадає', 'error');
+          setActionLoading(false);
+          return;
+        }
+        await api('/auth/me', { method: 'DELETE', body: JSON.stringify({ confirmEmail: deleteEmail }) });
+        showNotification('Акаунт видалено', 'success');
+        logout();
+        return;
+      }
+    } catch (err) {
+      showNotification(err.message, 'error');
+    }
+    setActionLoading(false);
+    setConfirmAction(null);
+    setDeleteEmail('');
+  };
+
+  const ss = {
+    section: {
+      background: 'linear-gradient(145deg, #1e293b, #0f172a)',
+      borderRadius: '20px',
+      padding: '28px',
+      border: '1px solid #334155',
+      marginBottom: '24px'
+    },
+    sectionTitle: {
+      fontFamily: "'Montserrat', sans-serif",
+      fontSize: '18px',
+      fontWeight: '600',
+      color: '#f1f5f9',
+      marginBottom: '20px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '10px'
+    },
+    table: {
+      width: '100%',
+      borderCollapse: 'collapse'
+    },
+    th: {
+      textAlign: 'left',
+      padding: '10px 14px',
+      color: '#94a3b8',
+      fontSize: '13px',
+      fontWeight: '600',
+      borderBottom: '1px solid #334155'
+    },
+    td: {
+      padding: '10px 14px',
+      color: '#e2e8f0',
+      fontSize: '14px',
+      borderBottom: '1px solid rgba(51, 65, 85, 0.5)'
+    },
+    dangerBtn: {
+      padding: '6px 14px',
+      background: '#dc2626',
+      border: 'none',
+      borderRadius: '8px',
+      color: 'white',
+      fontSize: '12px',
+      fontWeight: '600',
+      cursor: 'pointer',
+      fontFamily: 'inherit'
+    },
+    warningBtn: {
+      padding: '6px 14px',
+      background: '#d97706',
+      border: 'none',
+      borderRadius: '8px',
+      color: 'white',
+      fontSize: '12px',
+      fontWeight: '600',
+      cursor: 'pointer',
+      fontFamily: 'inherit'
+    },
+    discItem: {
+      padding: '14px 18px',
+      background: 'rgba(59, 130, 246, 0.05)',
+      borderRadius: '12px',
+      marginBottom: '10px',
+      border: '1px solid rgba(51, 65, 85, 0.5)',
+      cursor: 'pointer'
+    },
+    discHeader: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center'
+    },
+    discName: {
+      fontWeight: '600',
+      color: '#f1f5f9',
+      fontSize: '15px'
+    },
+    testRow: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      padding: '10px 16px',
+      background: 'rgba(15, 23, 42, 0.5)',
+      borderRadius: '8px',
+      marginTop: '8px',
+      marginLeft: '16px'
+    },
+    testName: {
+      color: '#e2e8f0',
+      fontSize: '14px'
+    },
+    btnGroup: {
+      display: 'flex',
+      gap: '8px'
+    },
+    profileCard: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      padding: '20px',
+      background: 'rgba(15, 23, 42, 0.5)',
+      borderRadius: '12px'
+    },
+    profileInfo: {
+      color: '#e2e8f0'
+    },
+    overlay: {
+      position: 'fixed',
+      top: 0, left: 0, right: 0, bottom: 0,
+      background: 'rgba(0, 0, 0, 0.8)',
+      display: 'flex',
+      justifyContent: 'center',
+      alignItems: 'center',
+      zIndex: 200
+    },
+    confirmModal: {
+      background: 'linear-gradient(145deg, #1e293b, #0f172a)',
+      borderRadius: '20px',
+      padding: '32px',
+      maxWidth: '440px',
+      width: '100%',
+      border: '1px solid #dc2626',
+      textAlign: 'center'
+    },
+    confirmTitle: {
+      fontFamily: "'Montserrat', sans-serif",
+      fontSize: '20px',
+      fontWeight: '700',
+      color: '#f1f5f9',
+      marginBottom: '16px'
+    },
+    confirmText: {
+      color: '#94a3b8',
+      marginBottom: '24px',
+      lineHeight: '1.6'
+    },
+    confirmBtns: {
+      display: 'flex',
+      gap: '12px',
+      justifyContent: 'center'
+    }
+  };
+
+  return (
+    <div>
+      <h3 style={{ fontFamily: "'Montserrat', sans-serif", fontSize: '22px', fontWeight: '600', color: '#f1f5f9', marginBottom: '24px' }}>
+        ⚙️ Налаштування
+      </h3>
+
+      {/* Секція: Студенти */}
+      <div style={ss.section}>
+        <div style={ss.sectionTitle}>👥 Студенти</div>
+        {loading ? (
+          <div style={{ color: '#64748b', textAlign: 'center', padding: '20px' }}>Завантаження...</div>
+        ) : students.length === 0 ? (
+          <div style={{ color: '#64748b', textAlign: 'center', padding: '20px' }}>
+            Немає студентів, які здавали ваші тести
+          </div>
+        ) : (
+          <table style={ss.table}>
+            <thead>
+              <tr>
+                <th style={ss.th}>Ім'я</th>
+                <th style={ss.th}>Email</th>
+                <th style={ss.th}>Група</th>
+                <th style={ss.th}>Здач</th>
+                <th style={ss.th}>Дія</th>
+              </tr>
+            </thead>
+            <tbody>
+              {students.map(s => (
+                <tr key={s.id}>
+                  <td style={ss.td}>{s.name}</td>
+                  <td style={ss.td}>{s.email}</td>
+                  <td style={ss.td}>{s.student_group || '—'}</td>
+                  <td style={ss.td}>{s.submissions_count}</td>
+                  <td style={ss.td}>
+                    <button
+                      style={ss.dangerBtn}
+                      onClick={() => setConfirmAction({ type: 'deleteStudent', id: s.id, name: s.name })}
+                    >
+                      Видалити
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Секція: Очистка даних */}
+      <div style={ss.section}>
+        <div style={ss.sectionTitle}>🗑️ Очистка даних</div>
+        {disciplines.length === 0 ? (
+          <div style={{ color: '#64748b', textAlign: 'center', padding: '20px' }}>Немає дисциплін</div>
+        ) : (
+          disciplines.map(disc => (
+            <div key={disc.id} style={ss.discItem}>
+              <div style={ss.discHeader} onClick={() => loadDiscTests(disc.id)}>
+                <span style={ss.discName}>
+                  {expandedDisc === disc.id ? '▼' : '▶'} {disc.name}
+                  <span style={{ color: '#64748b', fontWeight: '400', marginLeft: '10px', fontSize: '13px' }}>
+                    ({disc.tests_count || 0} тестів)
+                  </span>
+                </span>
+                <button
+                  style={ss.dangerBtn}
+                  onClick={(e) => { e.stopPropagation(); setConfirmAction({ type: 'deleteDiscipline', id: disc.id, name: disc.name }); }}
+                >
+                  Видалити назавжди
+                </button>
+              </div>
+              {expandedDisc === disc.id && discTests[disc.id] && (
+                <div style={{ marginTop: '10px' }}>
+                  {discTests[disc.id].length === 0 ? (
+                    <div style={{ color: '#64748b', padding: '10px 16px', fontSize: '13px' }}>Немає тестів</div>
+                  ) : (
+                    discTests[disc.id].map(test => (
+                      <div key={test.id} style={ss.testRow}>
+                        <span style={ss.testName}>
+                          {test.title}
+                          <span style={{ color: '#64748b', marginLeft: '8px', fontSize: '12px' }}>
+                            ({test.submissions_count || 0} здач)
+                          </span>
+                        </span>
+                        <div style={ss.btnGroup}>
+                          <button
+                            style={ss.warningBtn}
+                            onClick={() => setConfirmAction({ type: 'clearResults', id: test.id, name: test.title })}
+                          >
+                            Очистити результати
+                          </button>
+                          <button
+                            style={ss.dangerBtn}
+                            onClick={() => setConfirmAction({ type: 'deleteTest', id: test.id, name: test.title })}
+                          >
+                            Видалити назавжди
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Секція: Мій профіль */}
+      <div style={ss.section}>
+        <div style={ss.sectionTitle}>👤 Мій профіль</div>
+        <div style={ss.profileCard}>
+          <div style={ss.profileInfo}>
+            <div style={{ fontSize: '16px', fontWeight: '600', marginBottom: '4px' }}>{user?.name}</div>
+            <div style={{ color: '#94a3b8', fontSize: '14px' }}>{user?.email}</div>
+            <div style={{ color: '#64748b', fontSize: '13px', marginTop: '4px' }}>Роль: Викладач</div>
+          </div>
+          <button
+            style={{ ...ss.dangerBtn, padding: '10px 20px', fontSize: '14px' }}
+            onClick={() => setConfirmAction({ type: 'deleteAccount' })}
+          >
+            Видалити акаунт
+          </button>
+        </div>
+      </div>
+
+      {/* Модалка підтвердження */}
+      {confirmAction && (
+        <div style={ss.overlay} onClick={() => { setConfirmAction(null); setDeleteEmail(''); }}>
+          <div style={ss.confirmModal} onClick={e => e.stopPropagation()}>
+            <div style={ss.confirmTitle}>
+              ⚠️ Підтвердження
+            </div>
+            <div style={ss.confirmText}>
+              {confirmAction.type === 'deleteStudent' && (
+                <>Ви впевнені, що хочете видалити студента <strong style={{ color: '#f1f5f9' }}>{confirmAction.name}</strong>?<br/>Усі здачі цього студента буде видалено.</>
+              )}
+              {confirmAction.type === 'deleteDiscipline' && (
+                <>Ви впевнені, що хочете <strong style={{ color: '#dc2626' }}>назавжди</strong> видалити дисципліну <strong style={{ color: '#f1f5f9' }}>{confirmAction.name}</strong>?<br/>Усі тести, здачі та результати буде видалено без можливості відновлення.</>
+              )}
+              {confirmAction.type === 'deleteTest' && (
+                <>Ви впевнені, що хочете <strong style={{ color: '#dc2626' }}>назавжди</strong> видалити тест <strong style={{ color: '#f1f5f9' }}>{confirmAction.name}</strong>?<br/>Усі здачі та результати буде видалено.</>
+              )}
+              {confirmAction.type === 'clearResults' && (
+                <>Ви впевнені, що хочете очистити всі результати тесту <strong style={{ color: '#f1f5f9' }}>{confirmAction.name}</strong>?<br/>Тест залишиться, але всі здачі буде видалено.</>
+              )}
+              {confirmAction.type === 'deleteAccount' && (
+                <>
+                  Ви впевнені, що хочете <strong style={{ color: '#dc2626' }}>видалити свій акаунт</strong>?<br/>
+                  Усі ваші дисципліни, тести та результати буде видалено назавжди.<br/><br/>
+                  Для підтвердження введіть свій email:
+                  <input
+                    type="email"
+                    value={deleteEmail}
+                    onChange={e => setDeleteEmail(e.target.value)}
+                    placeholder={user?.email}
+                    style={{
+                      display: 'block',
+                      width: '100%',
+                      marginTop: '12px',
+                      padding: '12px 16px',
+                      background: '#0f172a',
+                      border: '2px solid #475569',
+                      borderRadius: '10px',
+                      color: '#e2e8f0',
+                      fontSize: '14px',
+                      fontFamily: 'inherit',
+                      boxSizing: 'border-box'
+                    }}
+                  />
+                </>
+              )}
+            </div>
+            <div style={ss.confirmBtns}>
+              <button
+                style={{ ...styles.secondaryBtn, padding: '10px 24px' }}
+                onClick={() => { setConfirmAction(null); setDeleteEmail(''); }}
+              >
+                Скасувати
+              </button>
+              <button
+                style={{ ...ss.dangerBtn, padding: '10px 24px', fontSize: '14px', opacity: actionLoading ? 0.6 : 1 }}
+                disabled={actionLoading}
+                onClick={executeAction}
+              >
+                {actionLoading ? 'Видалення...' : 'Підтвердити'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ============================================
 // COMPONENT STYLES
