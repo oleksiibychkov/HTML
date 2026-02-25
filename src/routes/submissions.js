@@ -389,6 +389,9 @@ router.post('/', authMiddleware, studentOnly, upload.single('file'), async (req,
         if (!req.file) {
             return res.status(400).json({ error: 'Завантажте файл роботи (PDF, MD, TXT, DOC, DOCX)' });
         }
+
+        console.log(`📤 Здача: студент=${req.user.id}, тест=${test_id}, файл=${req.file.originalname}, розмір=${req.file.size}`);
+
         
         // ============================================
         // БЕЗПЕКА: Перевірка справжнього типу файлу
@@ -511,8 +514,8 @@ router.post('/', authMiddleware, studentOnly, upload.single('file'), async (req,
         if (req.file && fs.existsSync(req.file.path)) {
             fs.unlinkSync(req.file.path);
         }
-        console.error('Помилка здачі роботи:', err);
-        res.status(500).json({ error: 'Помилка сервера' });
+        console.error('Помилка здачі роботи:', err.message, err.stack);
+        res.status(500).json({ error: 'Помилка сервера', details: err.message });
     }
 });
 
