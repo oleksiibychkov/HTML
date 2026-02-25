@@ -441,7 +441,12 @@ function RegisterForm({ setView, showNotification }) {
 // ============================================
 function AdminDashboard({ showNotification }) {
   const { user, logout } = useAuth();
-  const [activeTab, setActiveTab] = useState('stats');
+  const adminTabs = ['stats','teachers','students','disciplines','submissions'];
+  const [activeTab, setActiveTabState] = useState(() => {
+    const hash = window.location.hash.replace('#', '');
+    return adminTabs.includes(hash) ? hash : 'stats';
+  });
+  const setActiveTab = (tab) => { setActiveTabState(tab); window.location.hash = tab; };
   const [stats, setStats] = useState(null);
   const [teachers, setTeachers] = useState([]);
   const [students, setStudents] = useState([]);
@@ -451,7 +456,11 @@ function AdminDashboard({ showNotification }) {
   const [confirmAction, setConfirmAction] = useState(null);
   const [actionLoading, setActionLoading] = useState(false);
 
-  useEffect(() => { loadStats(); }, []);
+  useEffect(() => {
+    const hash = window.location.hash.replace('#', '');
+    if (adminTabs.includes(hash)) handleTabChange(hash);
+    else loadStats();
+  }, []);
 
   const loadStats = async () => {
     try {
@@ -491,6 +500,7 @@ function AdminDashboard({ showNotification }) {
 
   const handleTabChange = (tab) => {
     setActiveTab(tab);
+    if (tab === 'stats' && !stats) loadStats();
     if (tab === 'teachers' && teachers.length === 0) loadTeachers();
     if (tab === 'students' && students.length === 0) loadStudents();
     if (tab === 'disciplines' && disciplines.length === 0) loadDisciplines();
@@ -769,7 +779,12 @@ function AdminDashboard({ showNotification }) {
 function TeacherDashboard({ showNotification }) {
   const [disciplines, setDisciplines] = useState([]);
   const [submissions, setSubmissions] = useState([]);
-  const [activeTab, setActiveTab] = useState('disciplines');
+  const teacherTabs = ['disciplines','submissions','results','batch','requests','templates','settings'];
+  const [activeTab, setActiveTabState] = useState(() => {
+    const hash = window.location.hash.replace('#', '');
+    return teacherTabs.includes(hash) ? hash : 'disciplines';
+  });
+  const setActiveTab = (tab) => { setActiveTabState(tab); window.location.hash = tab; };
   const [showAddDiscipline, setShowAddDiscipline] = useState(false);
   const [showAddTest, setShowAddTest] = useState(null);
   const [selectedDiscipline, setSelectedDiscipline] = useState(null);
