@@ -55,11 +55,11 @@ function authMiddleware(req, res, next) {
 }
 
 /**
- * Перевіряє чи користувач є викладачем
+ * Перевіряє чи користувач є викладачем або адміністратором
  */
 function teacherOnly(req, res, next) {
-    if (req.user.role !== 'teacher') {
-        return res.status(403).json({ 
+    if (req.user.role !== 'teacher' && req.user.role !== 'admin') {
+        return res.status(403).json({
             error: 'Доступ тільки для викладачів',
             code: 'TEACHER_ONLY'
         });
@@ -72,9 +72,22 @@ function teacherOnly(req, res, next) {
  */
 function studentOnly(req, res, next) {
     if (req.user.role !== 'student') {
-        return res.status(403).json({ 
+        return res.status(403).json({
             error: 'Доступ тільки для студентів',
             code: 'STUDENT_ONLY'
+        });
+    }
+    next();
+}
+
+/**
+ * Перевіряє чи користувач є адміністратором
+ */
+function adminOnly(req, res, next) {
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({
+            error: 'Доступ тільки для адміністратора',
+            code: 'ADMIN_ONLY'
         });
     }
     next();
@@ -83,5 +96,6 @@ function studentOnly(req, res, next) {
 module.exports = {
     authMiddleware,
     teacherOnly,
-    studentOnly
+    studentOnly,
+    adminOnly
 };

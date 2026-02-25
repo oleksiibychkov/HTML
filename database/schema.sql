@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS users (
     name TEXT NOT NULL,
     
     -- Роль: 'teacher' або 'student'
-    role TEXT NOT NULL CHECK (role IN ('teacher', 'student')),
+    role TEXT NOT NULL CHECK (role IN ('teacher', 'student', 'admin')),
     
     -- Поля тільки для студентів (можуть бути NULL для викладачів)
     student_group TEXT,      -- Група (КН-21, ПЗ-32, тощо)

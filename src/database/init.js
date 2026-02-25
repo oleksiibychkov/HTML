@@ -106,6 +106,24 @@ async function init() {
         console.log('   ⚠️  Студент вже існує');
     }
 
+    // Створюємо адміністратора
+    const adminHash = bcrypt.hashSync('admin123', 10);
+    const existingAdmin = queryOne('SELECT id FROM users WHERE email = ?', { email: 'admin@test.com' });
+
+    if (!existingAdmin) {
+        try {
+            execute(`
+                INSERT INTO users (email, password_hash, name, role)
+                VALUES ('admin@test.com', @hash, 'Адміністратор', 'admin')
+            `, { hash: adminHash });
+            console.log('   ✅ Адмін: admin@test.com / admin123');
+        } catch (err) {
+            console.log('   ⚠️  Адмін вже існує');
+        }
+    } else {
+        console.log('   ⚠️  Адмін вже існує');
+    }
+
     // ============================================
     // СТВОРЕННЯ ДЕМО-ДИСЦИПЛІНИ
     // ============================================

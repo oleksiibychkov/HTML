@@ -516,7 +516,7 @@ router.post('/:id/grade-all', authMiddleware, teacherOnly, async (req, res) => {
             WHERE t.id = @id
         `, { id: testId });
         
-        if (!test || test.teacher_id !== req.user.id) {
+        if (!test || (req.user.role !== 'admin' && test.teacher_id !== req.user.id)) {
             return res.status(404).json({ error: 'Тест не знайдено' });
         }
         
@@ -1231,7 +1231,7 @@ router.get('/:id/results/:filename', authMiddleware, teacherOnly, (req, res) => 
             WHERE t.id = @id
         `, { id: testId });
         
-        if (!test || test.teacher_id !== req.user.id) {
+        if (!test || (req.user.role !== 'admin' && test.teacher_id !== req.user.id)) {
             return res.status(404).json({ error: 'Тест не знайдено' });
         }
         
@@ -1264,7 +1264,7 @@ router.get('/:id/quiz-report', authMiddleware, teacherOnly, (req, res) => {
             WHERE t.id = @id
         `, { id: testId });
 
-        if (!test || test.teacher_id !== req.user.id) {
+        if (!test || (req.user.role !== 'admin' && test.teacher_id !== req.user.id)) {
             return res.status(404).json({ error: 'Тест не знайдено' });
         }
 
@@ -1445,7 +1445,7 @@ router.delete('/:id', authMiddleware, teacherOnly, (req, res) => {
             WHERE t.id = @id
         `, { id: testId });
 
-        if (!test || test.teacher_id !== req.user.id) {
+        if (!test || (req.user.role !== 'admin' && test.teacher_id !== req.user.id)) {
             return res.status(404).json({ error: 'Тест не знайдено' });
         }
 
@@ -1473,7 +1473,7 @@ router.delete('/:id/permanent', authMiddleware, teacherOnly, (req, res) => {
             WHERE t.id = @id
         `, { id: testId });
 
-        if (!test || test.teacher_id !== req.user.id) {
+        if (!test || (req.user.role !== 'admin' && test.teacher_id !== req.user.id)) {
             return res.status(404).json({ error: 'Тест не знайдено' });
         }
 
@@ -1530,7 +1530,7 @@ router.post('/:id/update-criteria', authMiddleware, teacherOnly, uploadCriteria,
             WHERE t.id = @id
         `, { id: testId });
         
-        if (!test || test.teacher_id !== req.user.id) {
+        if (!test || (req.user.role !== 'admin' && test.teacher_id !== req.user.id)) {
             if (req.file) fs.unlinkSync(req.file.path);
             return res.status(404).json({ error: 'Тест не знайдено' });
         }

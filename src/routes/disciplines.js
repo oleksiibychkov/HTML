@@ -24,10 +24,23 @@ router.get('/', authMiddleware, (req, res) => {
     try {
         let disciplines;
         
-        if (req.user.role === 'teacher') {
+        if (req.user.role === 'admin') {
+            // Адмін бачить ВСІ дисципліни
+            disciplines = queryAll(`
+                SELECT d.*,
+                       COUNT(DISTINCT t.id) as tests_count,
+                       u.name as teacher_name
+                FROM disciplines d
+                LEFT JOIN tests t ON d.id = t.discipline_id
+                JOIN users u ON d.teacher_id = u.id
+                WHERE d.is_active = 1
+                GROUP BY d.id
+                ORDER BY d.created_at DESC
+            `);
+        } else if (req.user.role === 'teacher') {
             // Викладач бачить тільки свої дисципліни
             disciplines = queryAll(`
-                SELECT d.*, 
+                SELECT d.*,
                        COUNT(DISTINCT t.id) as tests_count,
                        u.name as teacher_name
                 FROM disciplines d
@@ -79,7 +92,7 @@ router.get('/:id', authMiddleware, (req, res) => {
             return res.status(404).json({ error: 'Дисципліну не знайдено' });
         }
         
-        // Перевірка доступу для викладача
+        // Перевірка доступу для викладача (адмін має доступ до всіх)
         if (req.user.role === 'teacher' && discipline.teacher_id !== req.user.id) {
             return res.status(403).json({ error: 'Це не ваша дисципліна' });
         }
@@ -174,13 +187,12 @@ router.put('/:id', authMiddleware, teacherOnly, (req, res) => {
     try {
         const disciplineId = parseInt(req.params.id);
         const { name, description } = req.body;
-        
-        // Перевіряємо чи дисципліна належить викладачу
-        const existing = queryOne(
-            'SELECT * FROM disciplines WHERE id = @id AND teacher_id = @teacherId',
-            { id: disciplineId, teacherId: req.user.id }
-        );
-        
+
+        const existing = req.user.role === 'admin'
+            ? queryOne('SELECT * FROM disciplines WHERE id = @id', { id: disciplineId })
+            : queryOne('SELECT * FROM disciplines WHERE id = @id AND teacher_id = @teacherId',
+                { id: disciplineId, teacherId: req.user.id });
+
         if (!existing) {
             return res.status(404).json({ error: 'Дисципліну не знайдено' });
         }
@@ -224,13 +236,12 @@ router.put('/:id', authMiddleware, teacherOnly, (req, res) => {
 router.delete('/:id', authMiddleware, teacherOnly, (req, res) => {
     try {
         const disciplineId = parseInt(req.params.id);
-        
-        // Перевіряємо чи дисципліна належить викладачу
-        const existing = queryOne(
-            'SELECT * FROM disciplines WHERE id = @id AND teacher_id = @teacherId',
-            { id: disciplineId, teacherId: req.user.id }
-        );
-        
+
+        const existing = req.user.role === 'admin'
+            ? queryOne('SELECT * FROM disciplines WHERE id = @id', { id: disciplineId })
+            : queryOne('SELECT * FROM disciplines WHERE id = @id AND teacher_id = @teacherId',
+                { id: disciplineId, teacherId: req.user.id });
+
         if (!existing) {
             return res.status(404).json({ error: 'Дисципліну не знайдено' });
         }
@@ -256,10 +267,10 @@ router.delete('/:id/permanent', authMiddleware, teacherOnly, (req, res) => {
     try {
         const disciplineId = parseInt(req.params.id);
 
-        const existing = queryOne(
-            'SELECT * FROM disciplines WHERE id = @id AND teacher_id = @teacherId',
-            { id: disciplineId, teacherId: req.user.id }
-        );
+        const existing = req.user.role === 'admin'
+            ? queryOne('SELECT * FROM disciplines WHERE id = @id', { id: disciplineId })
+            : queryOne('SELECT * FROM disciplines WHERE id = @id AND teacher_id = @teacherId',
+                { id: disciplineId, teacherId: req.user.id });
 
         if (!existing) {
             return res.status(404).json({ error: 'Дисципліну не знайдено' });

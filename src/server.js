@@ -360,6 +360,37 @@ async function runMigrations() {
             console.log('  ⚠️ quiz_answers explanation columns:', e.message);
         }
 
+        // v33: Додаємо роль admin до users
+        try {
+            const usersSchema = db.exec("SELECT sql FROM sqlite_master WHERE name='users'");
+            if (usersSchema.length > 0) {
+                const createSql = usersSchema[0].values[0][0];
+                if (createSql && !createSql.includes("'admin'")) {
+                    console.log('🔄 Міграція: додаю роль admin...');
+                    db.run('PRAGMA foreign_keys = OFF');
+                    db.run(`CREATE TABLE users_new (
+                        id INTEGER PRIMARY KEY,
+                        email TEXT NOT NULL UNIQUE,
+                        password_hash TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        role TEXT NOT NULL CHECK (role IN ('teacher', 'student', 'admin')),
+                        student_group TEXT,
+                        course INTEGER,
+                        is_active INTEGER DEFAULT 1,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )`);
+                    db.run('INSERT INTO users_new SELECT * FROM users');
+                    db.run('DROP TABLE users');
+                    db.run('ALTER TABLE users_new RENAME TO users');
+                    db.run('CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)');
+                    db.run('PRAGMA foreign_keys = ON');
+                    console.log('  + Роль admin додано');
+                }
+            }
+        } catch (e) {
+            console.log('  ⚠️ admin migration:', e.message);
+        }
+
         saveDatabase();
         console.log('✅ Міграції виконано');
     } catch (err) {

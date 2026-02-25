@@ -633,9 +633,9 @@ router.get('/', authMiddleware, (req, res) => {
     try {
         let submissions;
         
-        if (req.user.role === 'teacher') {
+        if (req.user.role === 'teacher' || req.user.role === 'admin') {
             const { discipline_id, test_id, status } = req.query;
-            
+
             let sql = `
                 SELECT s.*,
                        u.name as student_name,
@@ -647,6 +647,7 @@ router.get('/', authMiddleware, (req, res) => {
                        t.criteria_json,
                        t.grading_method,
                        d.name as discipline_name,
+                       teacher.name as teacher_name,
                        (SELECT COUNT(*) FROM resubmit_requests rr
                         WHERE rr.test_id = t.id AND rr.student_id = s.student_id AND rr.status = 'pending'
                        ) as has_pending_resubmit
@@ -654,23 +655,28 @@ router.get('/', authMiddleware, (req, res) => {
                 JOIN users u ON s.student_id = u.id
                 JOIN tests t ON s.test_id = t.id
                 JOIN disciplines d ON t.discipline_id = d.id
-                WHERE d.teacher_id = @teacherId
+                JOIN users teacher ON d.teacher_id = teacher.id
+                ${req.user.role === 'admin' ? '' : 'WHERE d.teacher_id = @teacherId'}
             `;
-            
-            const params = { teacherId: req.user.id };
-            
+
+            const params = req.user.role === 'admin' ? {} : { teacherId: req.user.id };
+            const hasWhere = req.user.role !== 'admin';
+            let filterAdded = hasWhere;
+
             if (discipline_id) {
-                sql += ' AND d.id = @disciplineId';
+                sql += (filterAdded ? ' AND' : ' WHERE') + ' d.id = @disciplineId';
                 params.disciplineId = parseInt(discipline_id);
+                filterAdded = true;
             }
-            
+
             if (test_id) {
-                sql += ' AND t.id = @testId';
+                sql += (filterAdded ? ' AND' : ' WHERE') + ' t.id = @testId';
                 params.testId = parseInt(test_id);
+                filterAdded = true;
             }
-            
+
             if (status) {
-                sql += ' AND s.status = @status';
+                sql += (filterAdded ? ' AND' : ' WHERE') + ' s.status = @status';
                 params.status = status;
             }
             
@@ -741,9 +747,9 @@ router.get('/:id', authMiddleware, (req, res) => {
         
         let submission;
         
-        if (req.user.role === 'teacher') {
+        if (req.user.role === 'teacher' || req.user.role === 'admin') {
             submission = queryOne(`
-                SELECT s.*, 
+                SELECT s.*,
                        u.name as student_name,
                        u.email as student_email,
                        u.student_group,
@@ -757,8 +763,8 @@ router.get('/:id', authMiddleware, (req, res) => {
                 JOIN users u ON s.student_id = u.id
                 JOIN tests t ON s.test_id = t.id
                 JOIN disciplines d ON t.discipline_id = d.id
-                WHERE s.id = @id AND d.teacher_id = @teacherId
-            `, { id: submissionId, teacherId: req.user.id });
+                WHERE s.id = @id ${req.user.role === 'admin' ? '' : 'AND d.teacher_id = @teacherId'}
+            `, req.user.role === 'admin' ? { id: submissionId } : { id: submissionId, teacherId: req.user.id });
         } else {
             submission = queryOne(`
                 SELECT s.*, 
@@ -900,7 +906,7 @@ router.post('/:id/grade', authMiddleware, teacherOnly, async (req, res) => {
         
         console.log(`📋 Test ID: ${submission.test_id}, criteria_json: ${submission.criteria_json ? 'є' : 'немає'}, criteria_file: ${submission.criteria_file || 'немає'}`);
         
-        if (submission.teacher_id !== req.user.id) {
+        if (req.user.role !== 'admin' && submission.teacher_id !== req.user.id) {
             return res.status(403).json({ error: 'Це не ваша дисципліна' });
         }
         
@@ -1327,7 +1333,7 @@ router.get('/test/:testId/results', authMiddleware, teacherOnly, (req, res) => {
             return res.status(404).json({ error: 'Тест не знайдено' });
         }
         
-        if (test.teacher_id !== req.user.id) {
+        if (req.user.role !== 'admin' && test.teacher_id !== req.user.id) {
             return res.status(403).json({ error: 'Це не ваш тест' });
         }
         
@@ -1366,7 +1372,7 @@ router.get('/test/:testId/results/view', authMiddleware, teacherOnly, (req, res)
             return res.status(404).json({ error: 'Тест не знайдено' });
         }
         
-        if (test.teacher_id !== req.user.id) {
+        if (req.user.role !== 'admin' && test.teacher_id !== req.user.id) {
             return res.status(403).json({ error: 'Це не ваш тест' });
         }
         
@@ -1692,7 +1698,7 @@ router.post('/test/:testId/clear-results', authMiddleware, teacherOnly, (req, re
             WHERE t.id = @id
         `, { id: testId });
 
-        if (!test || test.teacher_id !== req.user.id) {
+        if (!test || req.user.role !== 'admin' && test.teacher_id !== req.user.id) {
             return res.status(404).json({ error: 'Тест не знайдено' });
         }
 
@@ -1750,7 +1756,7 @@ router.delete('/:id', authMiddleware, teacherOnly, (req, res) => {
             return res.status(404).json({ error: 'Здачу не знайдено' });
         }
         
-        if (submission.teacher_id !== req.user.id) {
+        if (req.user.role !== 'admin' && submission.teacher_id !== req.user.id) {
             return res.status(403).json({ error: 'Немає прав на видалення' });
         }
         
@@ -1840,7 +1846,7 @@ router.post('/resubmit-requests/:id/approve', authMiddleware, teacherOnly, (req,
             return res.status(404).json({ error: 'Запит не знайдено' });
         }
         
-        if (request.teacher_id !== req.user.id) {
+        if (req.user.role !== 'admin' && request.teacher_id !== req.user.id) {
             return res.status(403).json({ error: 'Це не ваша дисципліна' });
         }
         
@@ -1895,7 +1901,7 @@ router.post('/resubmit-requests/:id/reject', authMiddleware, teacherOnly, (req, 
             WHERE rr.id = @id
         `, { id: requestId });
         
-        if (!request || request.teacher_id !== req.user.id) {
+        if (!request || req.user.role !== 'admin' && request.teacher_id !== req.user.id) {
             return res.status(404).json({ error: 'Запит не знайдено' });
         }
         
@@ -1933,7 +1939,7 @@ router.post('/:id/allow-resubmit', authMiddleware, teacherOnly, (req, res) => {
             WHERE s.id = @id
         `, { id: submissionId });
         
-        if (!submission || submission.teacher_id !== req.user.id) {
+        if (!submission || req.user.role !== 'admin' && submission.teacher_id !== req.user.id) {
             return res.status(404).json({ error: 'Здачу не знайдено' });
         }
         

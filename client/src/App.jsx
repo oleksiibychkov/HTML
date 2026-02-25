@@ -163,7 +163,7 @@ function AppContent() {
         {user && (
           <div style={styles.userBar}>
             <span style={styles.userName}>
-              {user.role === 'teacher' ? '👨‍🏫' : '👨‍🎓'} {user.name}
+              {user.role === 'admin' ? '🛡️' : user.role === 'teacher' ? '👨‍🏫' : '👨‍🎓'} {user.name}
             </span>
             <button onClick={logout} style={styles.logoutBtn}>Вийти</button>
           </div>
@@ -177,6 +177,8 @@ function AppContent() {
           ) : (
             <RegisterForm setView={setView} showNotification={showNotification} />
           )
+        ) : user.role === 'admin' ? (
+          <AdminDashboard showNotification={showNotification} />
         ) : user.role === 'teacher' ? (
           <TeacherDashboard showNotification={showNotification} />
         ) : (
@@ -430,6 +432,333 @@ function RegisterForm({ setView, showNotification }) {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ============================================
+// ADMIN DASHBOARD
+// ============================================
+function AdminDashboard({ showNotification }) {
+  const { user, logout } = useAuth();
+  const [activeTab, setActiveTab] = useState('stats');
+  const [stats, setStats] = useState(null);
+  const [teachers, setTeachers] = useState([]);
+  const [students, setStudents] = useState([]);
+  const [disciplines, setDisciplines] = useState([]);
+  const [submissions, setSubmissions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [confirmAction, setConfirmAction] = useState(null);
+  const [actionLoading, setActionLoading] = useState(false);
+
+  useEffect(() => { loadStats(); }, []);
+
+  const loadStats = async () => {
+    try {
+      const data = await api('/auth/admin/stats');
+      setStats(data.stats);
+    } catch (err) { showNotification(err.message, 'error'); }
+    setLoading(false);
+  };
+
+  const loadTeachers = async () => {
+    try {
+      const data = await api('/auth/admin/teachers');
+      setTeachers(data.teachers || []);
+    } catch (err) { showNotification(err.message, 'error'); }
+  };
+
+  const loadStudents = async () => {
+    try {
+      const data = await api('/auth/admin/students');
+      setStudents(data.students || []);
+    } catch (err) { showNotification(err.message, 'error'); }
+  };
+
+  const loadDisciplines = async () => {
+    try {
+      const data = await api('/disciplines');
+      setDisciplines(data.disciplines || []);
+    } catch (err) { showNotification(err.message, 'error'); }
+  };
+
+  const loadSubmissions = async () => {
+    try {
+      const data = await api('/submissions');
+      setSubmissions(data.submissions || []);
+    } catch (err) { showNotification(err.message, 'error'); }
+  };
+
+  const handleTabChange = (tab) => {
+    setActiveTab(tab);
+    if (tab === 'teachers' && teachers.length === 0) loadTeachers();
+    if (tab === 'students' && students.length === 0) loadStudents();
+    if (tab === 'disciplines' && disciplines.length === 0) loadDisciplines();
+    if (tab === 'submissions' && submissions.length === 0) loadSubmissions();
+  };
+
+  const executeAction = async () => {
+    if (!confirmAction) return;
+    setActionLoading(true);
+    try {
+      const { type, id, name } = confirmAction;
+      if (type === 'deleteUser') {
+        await api(`/auth/admin/users/${id}`, { method: 'DELETE' });
+        showNotification(`Користувача "${name}" видалено`, 'success');
+        loadTeachers(); loadStudents(); loadStats();
+      } else if (type === 'deleteDiscipline') {
+        await api(`/disciplines/${id}/permanent`, { method: 'DELETE' });
+        showNotification(`Дисципліну "${name}" видалено`, 'success');
+        loadDisciplines(); loadStats();
+      } else if (type === 'deleteTest') {
+        await api(`/tests/${id}/permanent`, { method: 'DELETE' });
+        showNotification(`Тест "${name}" видалено`, 'success');
+        loadDisciplines(); loadStats();
+      }
+    } catch (err) { showNotification(err.message, 'error'); }
+    setActionLoading(false);
+    setConfirmAction(null);
+  };
+
+  if (loading) return <div style={styles.loadingText}>Завантаження...</div>;
+
+  const as = {
+    statGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '16px', marginBottom: '24px' },
+    statCard: {
+      background: 'linear-gradient(145deg, #1e293b, #0f172a)',
+      borderRadius: '16px', padding: '24px', border: '1px solid #334155', textAlign: 'center'
+    },
+    statNumber: { fontSize: '36px', fontWeight: '700', color: '#3b82f6', fontFamily: "'Montserrat', sans-serif" },
+    statLabel: { color: '#94a3b8', fontSize: '14px', marginTop: '8px' },
+    table: { width: '100%', borderCollapse: 'collapse' },
+    th: { textAlign: 'left', padding: '12px 16px', color: '#94a3b8', fontSize: '13px', fontWeight: '600', borderBottom: '1px solid #334155' },
+    td: { padding: '12px 16px', color: '#e2e8f0', fontSize: '14px', borderBottom: '1px solid rgba(51, 65, 85, 0.5)' },
+    dangerBtn: {
+      padding: '6px 14px', background: '#dc2626', border: 'none', borderRadius: '8px',
+      color: 'white', fontSize: '12px', fontWeight: '600', cursor: 'pointer', fontFamily: 'inherit'
+    },
+    section: {
+      background: 'linear-gradient(145deg, #1e293b, #0f172a)',
+      borderRadius: '20px', padding: '28px', border: '1px solid #334155'
+    },
+    overlay: {
+      position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+      background: 'rgba(0, 0, 0, 0.8)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 200
+    },
+    confirmModal: {
+      background: 'linear-gradient(145deg, #1e293b, #0f172a)', borderRadius: '20px',
+      padding: '32px', maxWidth: '440px', width: '100%', border: '1px solid #dc2626', textAlign: 'center'
+    }
+  };
+
+  return (
+    <div style={styles.dashboard}>
+      <div style={styles.tabs}>
+        {[
+          { key: 'stats', label: '📊 Статистика' },
+          { key: 'teachers', label: '👨‍🏫 Викладачі' },
+          { key: 'students', label: '👨‍🎓 Студенти' },
+          { key: 'disciplines', label: '📚 Дисципліни' },
+          { key: 'submissions', label: '📝 Здачі' }
+        ].map(t => (
+          <button key={t.key} onClick={() => handleTabChange(t.key)}
+            style={activeTab === t.key ? styles.tabActive : styles.tab}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Статистика */}
+      {activeTab === 'stats' && stats && (
+        <div>
+          <h3 style={styles.sectionTitle}>Статистика системи</h3>
+          <div style={as.statGrid}>
+            {[
+              { n: stats.teachers, l: 'Викладачів', c: '#3b82f6' },
+              { n: stats.students, l: 'Студентів', c: '#10b981' },
+              { n: stats.disciplines, l: 'Дисциплін', c: '#8b5cf6' },
+              { n: stats.tests, l: 'Тестів', c: '#f59e0b' },
+              { n: stats.submissions, l: 'Здач', c: '#ef4444' },
+              { n: stats.graded, l: 'Оцінено', c: '#06b6d4' }
+            ].map((s, i) => (
+              <div key={i} style={as.statCard}>
+                <div style={{ ...as.statNumber, color: s.c }}>{s.n}</div>
+                <div style={as.statLabel}>{s.l}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Викладачі */}
+      {activeTab === 'teachers' && (
+        <div style={as.section}>
+          <h3 style={styles.sectionTitle}>Викладачі</h3>
+          {teachers.length === 0 ? (
+            <div style={styles.emptyState}>Немає викладачів</div>
+          ) : (
+            <table style={as.table}>
+              <thead><tr>
+                <th style={as.th}>Ім'я</th><th style={as.th}>Email</th>
+                <th style={as.th}>Дисциплін</th><th style={as.th}>Тестів</th>
+                <th style={as.th}>Дата реєстрації</th><th style={as.th}>Дія</th>
+              </tr></thead>
+              <tbody>
+                {teachers.map(t => (
+                  <tr key={t.id}>
+                    <td style={as.td}>{t.name}</td>
+                    <td style={as.td}>{t.email}</td>
+                    <td style={as.td}>{t.disciplines_count}</td>
+                    <td style={as.td}>{t.tests_count}</td>
+                    <td style={as.td}>{new Date(t.created_at).toLocaleDateString('uk-UA')}</td>
+                    <td style={as.td}>
+                      <button style={as.dangerBtn}
+                        onClick={() => setConfirmAction({ type: 'deleteUser', id: t.id, name: t.name })}>
+                        Видалити
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {/* Студенти */}
+      {activeTab === 'students' && (
+        <div style={as.section}>
+          <h3 style={styles.sectionTitle}>Студенти</h3>
+          {students.length === 0 ? (
+            <div style={styles.emptyState}>Немає студентів</div>
+          ) : (
+            <table style={as.table}>
+              <thead><tr>
+                <th style={as.th}>Ім'я</th><th style={as.th}>Email</th>
+                <th style={as.th}>Група</th><th style={as.th}>Здач</th>
+                <th style={as.th}>Дата реєстрації</th><th style={as.th}>Дія</th>
+              </tr></thead>
+              <tbody>
+                {students.map(s => (
+                  <tr key={s.id}>
+                    <td style={as.td}>{s.name}</td>
+                    <td style={as.td}>{s.email}</td>
+                    <td style={as.td}>{s.student_group || '—'}</td>
+                    <td style={as.td}>{s.submissions_count}</td>
+                    <td style={as.td}>{new Date(s.created_at).toLocaleDateString('uk-UA')}</td>
+                    <td style={as.td}>
+                      <button style={as.dangerBtn}
+                        onClick={() => setConfirmAction({ type: 'deleteUser', id: s.id, name: s.name })}>
+                        Видалити
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {/* Дисципліни */}
+      {activeTab === 'disciplines' && (
+        <div style={as.section}>
+          <h3 style={styles.sectionTitle}>Усі дисципліни</h3>
+          {disciplines.length === 0 ? (
+            <div style={styles.emptyState}>Немає дисциплін</div>
+          ) : (
+            <table style={as.table}>
+              <thead><tr>
+                <th style={as.th}>Назва</th><th style={as.th}>Викладач</th>
+                <th style={as.th}>Тестів</th><th style={as.th}>Дія</th>
+              </tr></thead>
+              <tbody>
+                {disciplines.map(d => (
+                  <tr key={d.id}>
+                    <td style={as.td}>{d.name}</td>
+                    <td style={as.td}>{d.teacher_name}</td>
+                    <td style={as.td}>{d.tests_count || 0}</td>
+                    <td style={as.td}>
+                      <button style={as.dangerBtn}
+                        onClick={() => setConfirmAction({ type: 'deleteDiscipline', id: d.id, name: d.name })}>
+                        Видалити назавжди
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {/* Здачі */}
+      {activeTab === 'submissions' && (
+        <div style={as.section}>
+          <h3 style={styles.sectionTitle}>Усі здачі ({submissions.length})</h3>
+          {submissions.length === 0 ? (
+            <div style={styles.emptyState}>Немає здач</div>
+          ) : (
+            <table style={as.table}>
+              <thead><tr>
+                <th style={as.th}>Студент</th><th style={as.th}>Тест</th>
+                <th style={as.th}>Викладач</th><th style={as.th}>Статус</th>
+                <th style={as.th}>Оцінка</th><th style={as.th}>Дата</th>
+              </tr></thead>
+              <tbody>
+                {submissions.slice(0, 100).map(s => (
+                  <tr key={s.id}>
+                    <td style={as.td}>{s.student_name}</td>
+                    <td style={as.td}>{s.test_title}</td>
+                    <td style={as.td}>{s.teacher_name || '—'}</td>
+                    <td style={as.td}>
+                      <span style={{
+                        padding: '3px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: '600',
+                        background: s.status === 'graded' ? 'rgba(16,185,129,0.2)' : s.status === 'pending' ? 'rgba(245,158,11,0.2)' : 'rgba(107,114,128,0.2)',
+                        color: s.status === 'graded' ? '#10b981' : s.status === 'pending' ? '#f59e0b' : '#9ca3af'
+                      }}>
+                        {s.status === 'graded' ? 'Оцінено' : s.status === 'pending' ? 'Очікує' : s.status}
+                      </span>
+                    </td>
+                    <td style={as.td}>{s.total_grade != null ? `${s.total_grade}/${s.max_points}` : '—'}</td>
+                    <td style={as.td}>{new Date(s.submitted_at).toLocaleDateString('uk-UA')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {/* Модалка підтвердження */}
+      {confirmAction && (
+        <div style={as.overlay} onClick={() => setConfirmAction(null)}>
+          <div style={as.confirmModal} onClick={e => e.stopPropagation()}>
+            <div style={{ fontFamily: "'Montserrat', sans-serif", fontSize: '20px', fontWeight: '700', color: '#f1f5f9', marginBottom: '16px' }}>
+              ⚠️ Підтвердження
+            </div>
+            <div style={{ color: '#94a3b8', marginBottom: '24px', lineHeight: '1.6' }}>
+              {confirmAction.type === 'deleteUser' && (
+                <>Видалити користувача <strong style={{ color: '#f1f5f9' }}>{confirmAction.name}</strong>?<br/>Усі пов'язані дані будуть видалені.</>
+              )}
+              {confirmAction.type === 'deleteDiscipline' && (
+                <>Видалити дисципліну <strong style={{ color: '#f1f5f9' }}>{confirmAction.name}</strong> назавжди?<br/>Усі тести та здачі будуть видалені.</>
+              )}
+              {confirmAction.type === 'deleteTest' && (
+                <>Видалити тест <strong style={{ color: '#f1f5f9' }}>{confirmAction.name}</strong> назавжди?</>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+              <button style={{ ...styles.secondaryBtn, padding: '10px 24px' }}
+                onClick={() => setConfirmAction(null)}>Скасувати</button>
+              <button style={{ ...as.dangerBtn, padding: '10px 24px', fontSize: '14px', opacity: actionLoading ? 0.6 : 1 }}
+                disabled={actionLoading} onClick={executeAction}>
+                {actionLoading ? 'Видалення...' : 'Підтвердити'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

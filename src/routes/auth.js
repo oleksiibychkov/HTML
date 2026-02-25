@@ -11,9 +11,8 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
-const { queryOne, execute } = require('../database/connection');
-const { authMiddleware, teacherOnly } = require('../middleware/auth');
-const { saveDatabase } = require('../database/connection');
+const { queryOne, queryAll, execute, saveDatabase } = require('../database/connection');
+const { authMiddleware, teacherOnly, adminOnly } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -219,6 +218,137 @@ router.post('/logout', authMiddleware, (req, res) => {
 // ============================================
 router.get('/me', authMiddleware, (req, res) => {
     res.json({ user: req.user });
+});
+
+// ============================================
+// ADMIN: СТАТИСТИКА СИСТЕМИ
+// ============================================
+router.get('/admin/stats', authMiddleware, adminOnly, (req, res) => {
+    try {
+        const stats = {
+            teachers: queryOne("SELECT COUNT(*) as count FROM users WHERE role = 'teacher' AND is_active = 1").count,
+            students: queryOne("SELECT COUNT(*) as count FROM users WHERE role = 'student' AND is_active = 1").count,
+            disciplines: queryOne("SELECT COUNT(*) as count FROM disciplines WHERE is_active = 1").count,
+            tests: queryOne("SELECT COUNT(*) as count FROM tests WHERE is_active = 1").count,
+            submissions: queryOne("SELECT COUNT(*) as count FROM submissions").count,
+            graded: queryOne("SELECT COUNT(*) as count FROM submissions WHERE status = 'graded'").count
+        };
+        res.json({ stats });
+    } catch (err) {
+        console.error('Помилка статистики:', err);
+        res.status(500).json({ error: 'Помилка сервера' });
+    }
+});
+
+// ============================================
+// ADMIN: ВСІ ВИКЛАДАЧІ
+// ============================================
+router.get('/admin/teachers', authMiddleware, adminOnly, (req, res) => {
+    try {
+        const teachers = queryAll(`
+            SELECT u.id, u.name, u.email, u.created_at, u.is_active,
+                   COUNT(DISTINCT d.id) as disciplines_count,
+                   COUNT(DISTINCT t.id) as tests_count
+            FROM users u
+            LEFT JOIN disciplines d ON d.teacher_id = u.id AND d.is_active = 1
+            LEFT JOIN tests t ON t.discipline_id = d.id AND t.is_active = 1
+            WHERE u.role = 'teacher'
+            GROUP BY u.id
+            ORDER BY u.name ASC
+        `);
+        res.json({ teachers });
+    } catch (err) {
+        console.error('Помилка:', err);
+        res.status(500).json({ error: 'Помилка сервера' });
+    }
+});
+
+// ============================================
+// ADMIN: ВСІ СТУДЕНТИ
+// ============================================
+router.get('/admin/students', authMiddleware, adminOnly, (req, res) => {
+    try {
+        const students = queryAll(`
+            SELECT u.id, u.name, u.email, u.student_group, u.course, u.created_at, u.is_active,
+                   COUNT(DISTINCT s.id) as submissions_count
+            FROM users u
+            LEFT JOIN submissions s ON s.student_id = u.id
+            WHERE u.role = 'student'
+            GROUP BY u.id
+            ORDER BY u.name ASC
+        `);
+        res.json({ students });
+    } catch (err) {
+        console.error('Помилка:', err);
+        res.status(500).json({ error: 'Помилка сервера' });
+    }
+});
+
+// ============================================
+// ADMIN: ВИДАЛИТИ БУДЬ-ЯКОГО КОРИСТУВАЧА
+// ============================================
+router.delete('/admin/users/:id', authMiddleware, adminOnly, (req, res) => {
+    try {
+        const userId = parseInt(req.params.id);
+        const user = queryOne('SELECT id, name, email, role FROM users WHERE id = @id', { id: userId });
+
+        if (!user) {
+            return res.status(404).json({ error: 'Користувача не знайдено' });
+        }
+        if (user.role === 'admin') {
+            return res.status(403).json({ error: 'Не можна видалити адміністратора' });
+        }
+
+        // Видаляємо файли
+        const fs = require('fs');
+        const path = require('path');
+
+        if (user.role === 'teacher') {
+            // Файли тестів
+            const tests = queryAll(`
+                SELECT t.task_file, t.criteria_file FROM tests t
+                JOIN disciplines d ON t.discipline_id = d.id
+                WHERE d.teacher_id = @id
+            `, { id: userId });
+            for (const t of tests) {
+                for (const f of ['task_file', 'criteria_file']) {
+                    if (t[f]) {
+                        const fp = path.resolve(__dirname, '../../', t[f]);
+                        if (fs.existsSync(fp)) try { fs.unlinkSync(fp); } catch (e) {}
+                    }
+                }
+            }
+            // Файли здач до тестів цього викладача
+            const subs = queryAll(`
+                SELECT s.file_path FROM submissions s
+                JOIN tests t ON s.test_id = t.id
+                JOIN disciplines d ON t.discipline_id = d.id
+                WHERE d.teacher_id = @id
+            `, { id: userId });
+            for (const s of subs) {
+                if (s.file_path) {
+                    const fp = path.resolve(__dirname, '../../', s.file_path);
+                    if (fs.existsSync(fp)) try { fs.unlinkSync(fp); } catch (e) {}
+                }
+            }
+        } else {
+            // Файли здач студента
+            const subs = queryAll('SELECT file_path FROM submissions WHERE student_id = @id', { id: userId });
+            for (const s of subs) {
+                if (s.file_path) {
+                    const fp = path.resolve(__dirname, '../../', s.file_path);
+                    if (fs.existsSync(fp)) try { fs.unlinkSync(fp); } catch (e) {}
+                }
+            }
+        }
+
+        execute('DELETE FROM users WHERE id = @id', { id: userId });
+        saveDatabase();
+        res.json({ message: `${user.role === 'teacher' ? 'Викладача' : 'Студента'} ${user.name} видалено` });
+    } catch (err) {
+        console.error('Помилка видалення:', err);
+        res.status(500).json({ error: 'Помилка сервера' });
+    }
 });
 
 // ============================================
