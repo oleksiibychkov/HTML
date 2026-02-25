@@ -465,9 +465,12 @@ function AdminDashboard({ showNotification }) {
   const [actionLoading, setActionLoading] = useState(false);
 
   useEffect(() => {
-    const hash = window.location.hash.replace('#', '');
-    if (adminTabs.includes(hash)) handleTabChange(hash);
-    else loadStats();
+    const init = async () => {
+      await loadStats();
+      const hash = window.location.hash.replace('#', '');
+      if (adminTabs.includes(hash)) handleTabChange(hash);
+    };
+    init();
   }, []);
 
   const loadStats = async () => {
@@ -508,11 +511,11 @@ function AdminDashboard({ showNotification }) {
 
   const handleTabChange = (tab) => {
     setActiveTab(tab);
-    if (tab === 'stats' && !stats) loadStats();
-    if (tab === 'teachers' && teachers.length === 0) loadTeachers();
-    if (tab === 'students' && students.length === 0) loadStudents();
-    if (tab === 'disciplines' && disciplines.length === 0) loadDisciplines();
-    if (tab === 'submissions' && submissions.length === 0) loadSubmissions();
+    if (tab === 'stats') loadStats();
+    if (tab === 'teachers') loadTeachers();
+    if (tab === 'students') loadStudents();
+    if (tab === 'disciplines') loadDisciplines();
+    if (tab === 'submissions') loadSubmissions();
   };
 
   const executeAction = async () => {
