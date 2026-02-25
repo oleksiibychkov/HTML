@@ -72,23 +72,35 @@ router.post('/register', (req, res, next) => {
         // Хешуємо пароль
         const passwordHash = bcrypt.hashSync(password, 10);
         
+        // Викладачі потребують підтвердження адміністратора
+        const isActive = role === 'teacher' ? 0 : 1;
+
         // Створюємо користувача
         const result = execute(`
-            INSERT INTO users (email, password_hash, name, role, student_group, course)
-            VALUES (@email, @hash, @name, @role, @group, @course)
+            INSERT INTO users (email, password_hash, name, role, student_group, course, is_active)
+            VALUES (@email, @hash, @name, @role, @group, @course, @isActive)
         `, {
             email: email.toLowerCase(),
             hash: passwordHash,
             name,
             role,
             group: role === 'student' ? group : null,
-            course: role === 'student' ? parseInt(course) : null
+            course: role === 'student' ? parseInt(course) : null,
+            isActive
         });
-        
-        // Автоматично логінимо
+
+        // Викладач — не логінимо, чекаємо підтвердження
+        if (role === 'teacher') {
+            return res.status(201).json({
+                message: 'Реєстрація успішна. Очікуйте підтвердження адміністратором.',
+                pending: true
+            });
+        }
+
+        // Студент — автоматично логінимо
         const token = uuidv4();
         const expiresAt = new Date(Date.now() + SESSION_HOURS * 60 * 60 * 1000).toISOString();
-        
+
         execute(`
             INSERT INTO sessions (user_id, token, expires_at)
             VALUES (@userId, @token, @expires)
@@ -97,7 +109,7 @@ router.post('/register', (req, res, next) => {
             token,
             expires: expiresAt
         });
-        
+
         res.status(201).json({
             message: 'Реєстрація успішна',
             token,
@@ -106,8 +118,8 @@ router.post('/register', (req, res, next) => {
                 email: email.toLowerCase(),
                 name,
                 role,
-                group: role === 'student' ? group : null,
-                course: role === 'student' ? parseInt(course) : null
+                group: group,
+                course: parseInt(course)
             }
         });
         
@@ -135,15 +147,27 @@ router.post('/login', (req, res, next) => {
             });
         }
         
+        // Перевіряємо чи є неактивний викладач (очікує підтвердження)
+        const pendingTeacher = queryOne(
+            'SELECT id FROM users WHERE email = @email AND is_active = 0 AND role = @role',
+            { email: email.toLowerCase(), role: 'teacher' }
+        );
+        if (pendingTeacher) {
+            return res.status(403).json({
+                error: 'Ваш акаунт очікує підтвердження адміністратором',
+                pending: true
+            });
+        }
+
         // Шукаємо користувача
         const user = queryOne(
             'SELECT * FROM users WHERE email = @email AND is_active = 1',
             { email: email.toLowerCase() }
         );
-        
+
         if (!user) {
-            return res.status(401).json({ 
-                error: 'Невірний email або пароль' 
+            return res.status(401).json({
+                error: 'Невірний email або пароль'
             });
         }
         
@@ -347,6 +371,54 @@ router.delete('/admin/users/:id', authMiddleware, adminOnly, (req, res) => {
         res.json({ message: `${user.role === 'teacher' ? 'Викладача' : 'Студента'} ${user.name} видалено` });
     } catch (err) {
         console.error('Помилка видалення:', err);
+        res.status(500).json({ error: 'Помилка сервера' });
+    }
+});
+
+// ============================================
+// ADMIN: ПІДТВЕРДИТИ ВИКЛАДАЧА
+// ============================================
+router.post('/admin/teachers/:id/approve', authMiddleware, adminOnly, (req, res) => {
+    try {
+        const userId = parseInt(req.params.id);
+        const user = queryOne('SELECT id, name, role, is_active FROM users WHERE id = @id', { id: userId });
+
+        if (!user || user.role !== 'teacher') {
+            return res.status(404).json({ error: 'Викладача не знайдено' });
+        }
+        if (user.is_active === 1) {
+            return res.status(400).json({ error: 'Викладач вже активний' });
+        }
+
+        execute('UPDATE users SET is_active = 1 WHERE id = @id', { id: userId });
+        saveDatabase();
+        res.json({ message: `Викладача "${user.name}" підтверджено` });
+    } catch (err) {
+        console.error('Помилка підтвердження:', err);
+        res.status(500).json({ error: 'Помилка сервера' });
+    }
+});
+
+// ============================================
+// ADMIN: ВІДХИЛИТИ (ВИДАЛИТИ) ВИКЛАДАЧА
+// ============================================
+router.post('/admin/teachers/:id/reject', authMiddleware, adminOnly, (req, res) => {
+    try {
+        const userId = parseInt(req.params.id);
+        const user = queryOne('SELECT id, name, role, is_active FROM users WHERE id = @id', { id: userId });
+
+        if (!user || user.role !== 'teacher') {
+            return res.status(404).json({ error: 'Викладача не знайдено' });
+        }
+        if (user.is_active === 1) {
+            return res.status(400).json({ error: 'Не можна відхилити активного викладача' });
+        }
+
+        execute('DELETE FROM users WHERE id = @id', { id: userId });
+        saveDatabase();
+        res.json({ message: `Заявку "${user.name}" відхилено` });
+    } catch (err) {
+        console.error('Помилка відхилення:', err);
         res.status(500).json({ error: 'Помилка сервера' });
     }
 });

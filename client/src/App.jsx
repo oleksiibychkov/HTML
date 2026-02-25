@@ -77,6 +77,9 @@ function AuthProvider({ children }) {
       method: 'POST',
       body: userData,
     });
+    if (data.pending) {
+      return data; // Викладач очікує підтвердження — не логінимо
+    }
     localStorage.setItem('token', data.token);
     setUser(data.user);
     return data;
@@ -297,7 +300,7 @@ function RegisterForm({ setView, showNotification }) {
     setIsLoading(true);
     
     try {
-      await register({
+      const result = await register({
         name: formData.name,
         email: formData.email,
         password: formData.password,
@@ -305,7 +308,12 @@ function RegisterForm({ setView, showNotification }) {
         group: formData.group,
         course: formData.course
       });
-      showNotification('Реєстрація успішна!', 'success');
+      if (result.pending) {
+        showNotification('Реєстрація успішна! Ваш акаунт очікує підтвердження адміністратором.', 'success');
+        setTimeout(() => setView('login'), 2000);
+      } else {
+        showNotification('Реєстрація успішна!', 'success');
+      }
     } catch (err) {
       showNotification(err.message, 'error');
     }
@@ -512,7 +520,15 @@ function AdminDashboard({ showNotification }) {
     setActionLoading(true);
     try {
       const { type, id, name } = confirmAction;
-      if (type === 'deleteUser') {
+      if (type === 'approveTeacher') {
+        await api(`/auth/admin/teachers/${id}/approve`, { method: 'POST' });
+        showNotification(`Викладача "${name}" підтверджено`, 'success');
+        loadTeachers(); loadStats();
+      } else if (type === 'rejectTeacher') {
+        await api(`/auth/admin/teachers/${id}/reject`, { method: 'POST' });
+        showNotification(`Заявку "${name}" відхилено`, 'success');
+        loadTeachers(); loadStats();
+      } else if (type === 'deleteUser') {
         await api(`/auth/admin/users/${id}`, { method: 'DELETE' });
         showNotification(`Користувача "${name}" видалено`, 'success');
         loadTeachers(); loadStudents(); loadStats();
@@ -601,39 +617,73 @@ function AdminDashboard({ showNotification }) {
       )}
 
       {/* Викладачі */}
-      {activeTab === 'teachers' && (
-        <div style={as.section}>
-          <h3 style={styles.sectionTitle}>Викладачі</h3>
-          {teachers.length === 0 ? (
-            <div style={styles.emptyState}>Немає викладачів</div>
-          ) : (
-            <table style={as.table}>
-              <thead><tr>
-                <th style={as.th}>Ім'я</th><th style={as.th}>Email</th>
-                <th style={as.th}>Дисциплін</th><th style={as.th}>Тестів</th>
-                <th style={as.th}>Дата реєстрації</th><th style={as.th}>Дія</th>
-              </tr></thead>
-              <tbody>
-                {teachers.map(t => (
-                  <tr key={t.id}>
-                    <td style={as.td}>{t.name}</td>
-                    <td style={as.td}>{t.email}</td>
-                    <td style={as.td}>{t.disciplines_count}</td>
-                    <td style={as.td}>{t.tests_count}</td>
-                    <td style={as.td}>{new Date(t.created_at).toLocaleDateString('uk-UA')}</td>
-                    <td style={as.td}>
-                      <button style={as.dangerBtn}
-                        onClick={() => setConfirmAction({ type: 'deleteUser', id: t.id, name: t.name })}>
-                        Видалити
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      )}
+      {activeTab === 'teachers' && (() => {
+        const pending = teachers.filter(t => !t.is_active);
+        const active = teachers.filter(t => t.is_active);
+        return (
+          <div style={as.section}>
+            {pending.length > 0 && (
+              <>
+                <h3 style={{ ...styles.sectionTitle, color: '#f59e0b' }}>Очікують підтвердження ({pending.length})</h3>
+                <table style={{ ...as.table, marginBottom: '32px' }}>
+                  <thead><tr>
+                    <th style={as.th}>Ім'я</th><th style={as.th}>Email</th>
+                    <th style={as.th}>Дата реєстрації</th><th style={as.th}>Дії</th>
+                  </tr></thead>
+                  <tbody>
+                    {pending.map(t => (
+                      <tr key={t.id} style={{ background: 'rgba(245, 158, 11, 0.05)' }}>
+                        <td style={as.td}>{t.name}</td>
+                        <td style={as.td}>{t.email}</td>
+                        <td style={as.td}>{new Date(t.created_at).toLocaleDateString('uk-UA')}</td>
+                        <td style={{ ...as.td, display: 'flex', gap: '8px' }}>
+                          <button style={{ ...as.dangerBtn, background: '#16a34a' }}
+                            onClick={() => setConfirmAction({ type: 'approveTeacher', id: t.id, name: t.name })}>
+                            Підтвердити
+                          </button>
+                          <button style={as.dangerBtn}
+                            onClick={() => setConfirmAction({ type: 'rejectTeacher', id: t.id, name: t.name })}>
+                            Відхилити
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
+            <h3 style={styles.sectionTitle}>Активні викладачі ({active.length})</h3>
+            {active.length === 0 ? (
+              <div style={styles.emptyState}>Немає активних викладачів</div>
+            ) : (
+              <table style={as.table}>
+                <thead><tr>
+                  <th style={as.th}>Ім'я</th><th style={as.th}>Email</th>
+                  <th style={as.th}>Дисциплін</th><th style={as.th}>Тестів</th>
+                  <th style={as.th}>Дата реєстрації</th><th style={as.th}>Дія</th>
+                </tr></thead>
+                <tbody>
+                  {active.map(t => (
+                    <tr key={t.id}>
+                      <td style={as.td}>{t.name}</td>
+                      <td style={as.td}>{t.email}</td>
+                      <td style={as.td}>{t.disciplines_count}</td>
+                      <td style={as.td}>{t.tests_count}</td>
+                      <td style={as.td}>{new Date(t.created_at).toLocaleDateString('uk-UA')}</td>
+                      <td style={as.td}>
+                        <button style={as.dangerBtn}
+                          onClick={() => setConfirmAction({ type: 'deleteUser', id: t.id, name: t.name })}>
+                          Видалити
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Студенти */}
       {activeTab === 'students' && (
@@ -748,6 +798,12 @@ function AdminDashboard({ showNotification }) {
               ⚠️ Підтвердження
             </div>
             <div style={{ color: '#94a3b8', marginBottom: '24px', lineHeight: '1.6' }}>
+              {confirmAction.type === 'approveTeacher' && (
+                <>Підтвердити викладача <strong style={{ color: '#22c55e' }}>{confirmAction.name}</strong>?<br/>Він зможе увійти та створювати дисципліни і тести.</>
+              )}
+              {confirmAction.type === 'rejectTeacher' && (
+                <>Відхилити заявку <strong style={{ color: '#f1f5f9' }}>{confirmAction.name}</strong>?<br/>Акаунт буде видалено.</>
+              )}
               {confirmAction.type === 'deleteUser' && (
                 <>Видалити користувача <strong style={{ color: '#f1f5f9' }}>{confirmAction.name}</strong>?<br/>Усі пов'язані дані будуть видалені.</>
               )}
